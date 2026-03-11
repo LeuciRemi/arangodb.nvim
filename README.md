@@ -16,10 +16,10 @@ This plugin extracts the ArangoDB browser workflow from my personal config into 
 ## Requirements
 
 - Neovim `>= 0.9`
-- `python3`
 - `folke/snacks.nvim`
 
-The Python runner uses the standard library only, so there is no extra Python package to install.
+The plugin now talks to ArangoDB through a built-in Lua HTTP client.
+Current MVP scope: plain `http://` ArangoDB instances for local/dev usage.
 
 ## Installation
 
@@ -60,9 +60,9 @@ require("arangodb").setup({
     kore = "arangodb://root:root@127.0.0.1:8529/kore",
   },
   default_database = "kore",
-  python_command = "python3",
   field_sample_size = 200,
   page_size = 50,
+  http_timeout = 30000,
   legacy_globals = true,
 })
 ```
@@ -71,8 +71,6 @@ require("arangodb").setup({
 
 - `connections`: table of named connection URLs, either `{ name = url }` or `{ { name = "db", url = "..." } }`
 - `default_database`: preferred database name or `{ name, url }`
-- `python_command`: string or argv-style table used to run the Python runner
-- `runner`: optional absolute path or function returning the runner path
 - `keymaps.browse`: global normal-mode keymap for `require("arangodb").browse()`
 - `keymaps.resume`: global normal-mode keymap for `require("arangodb").resume()`
 - `document_keymaps.save`: buffer-local keymap for saving the current document
@@ -80,6 +78,7 @@ require("arangodb").setup({
 - `document_keymaps.related`: buffer-local keymap for opening related documents
 - `field_sample_size`: number of documents sampled when listing candidate filter fields
 - `page_size`: number of documents fetched per picker page
+- `http_timeout`: timeout in milliseconds for ArangoDB HTTP requests
 - `legacy_globals`: also read `vim.g.arango_connections` and `vim.g.dbs`
 
 ## Environment variables
@@ -128,10 +127,11 @@ Run:
 :checkhealth arangodb
 ```
 
-It checks the Python command, the bundled runner script, `snacks.nvim`, and detected database candidates.
+It checks the built-in Lua HTTP transport, `snacks.nvim`, and detected database candidates.
 
 ## Notes
 
 - This plugin currently relies on `folke/snacks.nvim` for the live picker UI.
+- The current Lua transport supports plain `http://` ArangoDB instances only.
 - Connection strings may contain credentials, so prefer environment variables if you do not want them stored in your config.
 - Add a license before making the repository fully public for reuse.

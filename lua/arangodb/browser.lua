@@ -1,6 +1,7 @@
 local M = {}
 
 local arango = require("arangodb.core")
+local client = require("arangodb.client")
 
 local function is_list(value)
   if vim.islist then
@@ -47,32 +48,93 @@ local function get_snacks()
   return nil
 end
 
-local function command(config, subcommand, extra)
-  return arango.python_command(config, subcommand, extra)
+local function parse_extra(extra)
+  local options = {}
+  local index = 1
+
+  while type(extra) == "table" and index <= #extra do
+    local key = extra[index]
+    if type(key) == "string" and vim.startswith(key, "--") then
+      local name = key:sub(3):gsub("-", "_")
+      local value = extra[index + 1]
+      if value == nil then
+        options[name] = true
+        index = index + 1
+      else
+        options[name] = value
+        index = index + 2
+      end
+    else
+      options[#options + 1] = key
+      index = index + 1
+    end
+  end
+
+  return options
 end
 
 local function run_json(config, subcommand, extra)
-  return arango.run_json(command(config, subcommand, extra))
+  local options = parse_extra(extra)
+
+  if subcommand == "browse" then
+    return client.browse_collection(
+      config,
+      options.collection,
+      options.field,
+      options.search,
+      options.offset,
+      options.limit
+    )
+  end
+  if subcommand == "get" then
+    return client.get_document(config, options.id)
+  end
+  if subcommand == "delete" then
+    return client.delete_document(config, options.id)
+  end
+  if subcommand == "rename-collection" then
+    return client.rename_collection(config, options.collection, options.name)
+  end
+  if subcommand == "truncate-collection" then
+    return client.truncate_collection(config, options.collection)
+  end
+  if subcommand == "search-related" then
+    return client.search_related(config, options.field, options.value, options.limit)
+  end
+
+  error("Unsupported ArangoDB command: " .. tostring(subcommand))
 end
 
 local function run_lines(config, subcommand, extra)
-  return arango.run_lines(command(config, subcommand, extra))
+  local options = parse_extra(extra)
+
+  if subcommand == "collections" then
+    return client.list_collections(config)
+  end
+  if subcommand == "databases" then
+    return client.list_databases(config)
+  end
+  if subcommand == "fields" then
+    return client.list_fields(config, options.collection, options.sample_size)
+  end
+
+  error("Unsupported ArangoDB command: " .. tostring(subcommand))
+end
+
+local function try_call(title, fn, ...)
+  local ok, result = pcall(fn, ...)
+  if ok then
+    return result
+  end
+  arango.notify_error(result, title or "ArangoDB")
 end
 
 local function try_json(config, title, subcommand, extra)
-  local ok, result = pcall(run_json, config, subcommand, extra)
-  if ok then
-    return result
-  end
-  arango.notify_error(result, title or "ArangoDB")
+  return try_call(title, run_json, config, subcommand, extra)
 end
 
 local function try_lines(config, title, subcommand, extra)
-  local ok, result = pcall(run_lines, config, subcommand, extra)
-  if ok then
-    return result
-  end
-  arango.notify_error(result, title or "ArangoDB")
+  return try_call(title, run_lines, config, subcommand, extra)
 end
 
 local function close_picker(picker)
@@ -445,11 +507,7 @@ local function document_actions(config, buf)
       return
     end
 
-    local temp = vim.fn.tempname() .. ".json"
-    vim.fn.writefile({ vim.json.encode(payload) }, temp)
-
-    local result = try_json(config, "ArangoDB Save", "save", { "--input-file", temp })
-    vim.fn.delete(temp)
+    local result = try_call("ArangoDB Save", client.save_document, config, payload)
     if not result then
       return
     end
