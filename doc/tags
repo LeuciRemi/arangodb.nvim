@@ -1,0 +1,12 @@
+:ArangoBrowse	arangodb.nvim.txt	/*:ArangoBrowse*
+:ArangoDocumentDelete	arangodb.nvim.txt	/*:ArangoDocumentDelete*
+:ArangoDocumentRelated	arangodb.nvim.txt	/*:ArangoDocumentRelated*
+:ArangoDocumentSave	arangodb.nvim.txt	/*:ArangoDocumentSave*
+:ArangoResume	arangodb.nvim.txt	/*:ArangoResume*
+arangodb.nvim-commands	arangodb.nvim.txt	/*arangodb.nvim-commands*
+arangodb.nvim-contents	arangodb.nvim.txt	/*arangodb.nvim-contents*
+arangodb.nvim-health	arangodb.nvim.txt	/*arangodb.nvim-health*
+arangodb.nvim-intro	arangodb.nvim.txt	/*arangodb.nvim-intro*
+arangodb.nvim-requirements	arangodb.nvim.txt	/*arangodb.nvim-requirements*
+arangodb.nvim-setup	arangodb.nvim.txt	/*arangodb.nvim-setup*
+arangodb.nvim.txt	arangodb.nvim.txt	/*arangodb.nvim.txt*
