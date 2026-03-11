@@ -278,6 +278,70 @@ local function field_expression(field_path)
   return expression
 end
 
+local function related_field_paths(field)
+  if type(field) == "table" then
+    if vim.tbl_isempty(field) then
+      error("Missing field")
+    end
+    return field
+  end
+
+  if not field or field == "" then
+    error("Missing field")
+  end
+
+  return { field }
+end
+
+local function related_filter_clause(fields)
+  local clauses = {}
+
+  for _, field_name in ipairs(related_field_paths(fields)) do
+    local expression = field_expression(field_name)
+    clauses[#clauses + 1] = string.format(
+      "((IS_ARRAY(%s) AND LENGTH(FOR entry IN %s FILTER POSITION(@values, TO_STRING(entry)) LIMIT 1 RETURN 1) > 0) OR POSITION(@values, TO_STRING(%s)))",
+      expression,
+      expression,
+      expression
+    )
+  end
+
+  return table.concat(clauses, " OR ")
+end
+
+local function related_search_values(value)
+  local values = {}
+  local seen = {}
+
+  local function add(item)
+    if item == nil or item == "" then
+      return
+    end
+
+    local text = tostring(item)
+    if seen[text] then
+      return
+    end
+
+    seen[text] = true
+    values[#values + 1] = text
+  end
+
+  if type(value) == "table" and is_list(value) then
+    for _, item in ipairs(value) do
+      add(item)
+    end
+  else
+    add(value)
+  end
+
+  if #values == 0 then
+    error("Missing value")
+  end
+
+  return values
+end
+
 local function truncate_text(value, max_length)
   max_length = max_length or 120
 
@@ -298,6 +362,19 @@ local function truncate_text(value, max_length)
     return text
   end
   return text:sub(1, max_length - 1) .. "..."
+end
+
+local function related_field_value_text(document, fields)
+  local items = {}
+
+  for _, field_name in ipairs(related_field_paths(fields)) do
+    local value = extract_value(document, field_name)
+    if value ~= nil then
+      items[#items + 1] = string.format("%s=%s", field_name, truncate_text(value, 48))
+    end
+  end
+
+  return table.concat(items, " | ")
 end
 
 function M.list_databases(config)
@@ -421,27 +498,27 @@ function M.truncate_collection(config, collection)
   }
 end
 
-function M.search_related(config, field, value, limit)
-  if not field or field == "" then
-    error("Missing field")
-  end
-
-  local expression = field_expression(field)
-  local query = table.concat({
-    "FOR doc IN @@collection",
-    string.format("LET related = %s", expression),
-    "FILTER (IS_ARRAY(related) AND POSITION(related, @value, true)) OR TO_STRING(related) == @value",
-    "LIMIT @limit",
-    "RETURN doc",
-  }, "\n")
+function M.search_related(config, field, value, limit, collection)
+  local values = related_search_values(value)
   local matches = {}
   local seen = {}
   local batch_size = math.max(tonumber(limit) or 20, 1)
+  local collections = collection and { collection } or M.list_collections(config)
+  local fields = related_field_paths(field)
+  local filter_clause = related_filter_clause(fields)
 
-  for _, collection in ipairs(M.list_collections(config)) do
+  for _, collection_name in ipairs(collections) do
+    local query = table.concat({
+      "FOR doc IN @@collection",
+      "FILTER " .. filter_clause,
+      "SORT doc._key",
+      "LIMIT @limit",
+      "RETURN doc",
+    }, "\n")
+
     local result = run_aql(config, query, {
-      ["@collection"] = collection,
-      value = tostring(value),
+      ["@collection"] = collection_name,
+      values = values,
       limit = batch_size,
     }, batch_size)
 
@@ -456,6 +533,71 @@ function M.search_related(config, field, value, limit)
 
   return {
     matches = matches,
+  }
+end
+
+function M.browse_related_collection(config, collection, field, value, search, offset, limit)
+  local values = related_search_values(value)
+  local fields = related_field_paths(field)
+  local filter_clause = related_filter_clause(fields)
+
+  search = search or ""
+  offset = math.max(tonumber(offset) or 0, 0)
+  limit = math.max(tonumber(limit) or 50, 1)
+
+  local bind_vars = {
+    ["@collection"] = collection,
+    values = values,
+    offset = offset,
+    limit = limit + 1,
+  }
+
+  local query_lines = {
+    "FOR doc IN @@collection",
+    "FILTER " .. filter_clause,
+  }
+
+  if search ~= "" then
+    bind_vars.search = search:lower()
+    query_lines[#query_lines + 1] = "FILTER CONTAINS(LOWER(doc._id), @search) OR CONTAINS(LOWER(doc._key), @search)"
+  end
+
+  vim.list_extend(query_lines, {
+    "SORT doc._key",
+    "LIMIT @offset, @limit",
+    "RETURN doc",
+  })
+
+  local data = run_aql(config, table.concat(query_lines, "\n"), bind_vars)
+  local documents = vim.deepcopy(data.result or {})
+  local has_more = #documents > limit
+
+  while #documents > limit do
+    documents[#documents] = nil
+  end
+
+  local items = {}
+  for _, document in ipairs(documents) do
+    items[#items + 1] = {
+      key = document._key,
+      id = document._id,
+      field = fields,
+      field_value = nil,
+      field_value_text = related_field_value_text(document, fields),
+      preview = json_pretty(document),
+    }
+  end
+
+  return {
+    database = config.database,
+    collection = collection,
+    field = fields,
+    search = search,
+    offset = offset,
+    limit = limit,
+    total_count = nil,
+    has_more = has_more,
+    items = items,
   }
 end
 

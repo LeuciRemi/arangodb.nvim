@@ -20,7 +20,7 @@ Main features:
 - search documents with a live picker
 - open JSON documents in regular buffers
 - save, delete, rename, and truncate from Neovim
-- jump to related documents
+- jump to related documents from direct foreign keys, relation objects, and reverse links
 
 ===============================================================================
 REQUIREMENTS                                      *arangodb.nvim-requirements*
@@ -89,6 +89,10 @@ COMMANDS                                              *arangodb.nvim-commands*
 :ArangoResume
     Reopen the last picker if it still exists.
 
+                                                         *:ArangoBack*
+:ArangoBack
+    Return to the previous ArangoDB picker or document view.
+
                                                 *:ArangoDocumentSave*
 :ArangoDocumentSave
     Save the current ArangoDB document buffer.
@@ -99,7 +103,8 @@ COMMANDS                                              *arangodb.nvim-commands*
 
                                              *:ArangoDocumentRelated*
 :ArangoDocumentRelated
-    Pick and open a related document from the current buffer.
+    Pick and open a related document from direct foreign keys, nested
+    relation objects, or reverse links discovered in other collections.
 
 ===============================================================================
 HEALTH                                                    *arangodb.nvim-health*

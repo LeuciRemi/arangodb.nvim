@@ -43,4 +43,8 @@ function M.resume()
   return require("arangodb.browser").resume()
 end
 
+function M.back()
+  return require("arangodb.browser").back()
+end
+
 return M
