@@ -41,6 +41,12 @@ function M.setup()
   end, {
     desc = "Resume the last ArangoDB browser",
   })
+
+  vim.api.nvim_create_user_command("ArangoBack", function()
+    require("arangodb").back()
+  end, {
+    desc = "Go back to the previous ArangoDB view",
+  })
 end
 
 return M

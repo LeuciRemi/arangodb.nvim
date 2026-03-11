@@ -9,7 +9,7 @@ This plugin extracts the ArangoDB browser workflow from my personal config into 
 - Pick a database and collection from inside Neovim
 - Search documents live with `snacks.nvim`
 - Open documents in JSON buffers and save them back to ArangoDB
-- Jump to related documents based on `_id`, `_key`, or nested relation-like fields
+- Jump to related documents from direct foreign keys, nested relation objects, and reverse links discovered in other collections
 - Delete documents, rename collections, and truncate collections
 - Discover databases from environment variables or explicit connection config
 
@@ -107,9 +107,10 @@ export NVIM_ARANGO_KORE_URL='arangodb://root:root@127.0.0.1:8529/kore'
 - `:ArangoBrowse` - pick a database, then browse a collection
 - `:ArangoBrowse {database}` - browse a specific database directly
 - `:ArangoResume` - reopen the current browser picker
+- `:ArangoBack` - return to the previous ArangoDB picker or document view
 - `:ArangoDocumentSave` - save the current document buffer
 - `:ArangoDocumentDelete` - delete the current document buffer
-- `:ArangoDocumentRelated` - open a related document from the current buffer
+- `:ArangoDocumentRelated` - open a related document from direct keys, nested relations, or reverse links in the current buffer
 
 ## Lua API
 
