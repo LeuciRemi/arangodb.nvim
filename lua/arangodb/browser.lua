@@ -159,6 +159,28 @@ local function execute_picker_action(picker, action)
   picker.list.win:execute(action)
 end
 
+local function restore_picker_input_focus(picker)
+  if not picker or picker.closed then
+    return
+  end
+
+  vim.schedule(function()
+    if not picker or picker.closed or not picker.input or not picker.input.win then
+      return
+    end
+
+    local input_win = picker.input.win.win
+    if not input_win or not vim.api.nvim_win_is_valid(input_win) then
+      return
+    end
+
+    picker:focus("input", { show = true })
+    if vim.api.nvim_get_current_win() == input_win and vim.fn.mode():sub(1, 1) ~= "i" then
+      vim.cmd("startinsert!")
+    end
+  end)
+end
+
 local function title(database, collection, field, meta)
   local first = #meta.items > 0 and (meta.offset + 1) or 0
   local last = meta.offset + #meta.items
@@ -324,7 +346,7 @@ local function choose_collection(config, callback)
   }, callback)
 end
 
-local function choose_field(config, collection, callback)
+local function choose_field(config, collection, picker, callback)
   local fields = try_lines(config, "ArangoDB", "fields", {
     "--collection",
     collection,
@@ -339,9 +361,14 @@ local function choose_field(config, collection, callback)
     fields = { "_key" }
   end
 
-  prompt_select(fields, {
+  vim.ui.select(fields, {
     prompt = string.format("Filter field (%s/%s)", config.database, collection),
-  }, callback)
+  }, function(choice)
+    if choice then
+      callback(choice)
+    end
+    restore_picker_input_focus(picker)
+  end)
 end
 
 local function document_buffer_name(doc)
@@ -818,7 +845,7 @@ local function browse_collection(config, collection, field)
         current:find()
       end,
       arango_change_field = function(current)
-        choose_field(config, collection, function(new_field)
+        choose_field(config, collection, current, function(new_field)
           meta.field = new_field
           field = new_field
           meta.offset = 0
