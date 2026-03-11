@@ -26,10 +26,10 @@ Main features:
 REQUIREMENTS                                      *arangodb.nvim-requirements*
 
 - Neovim >= 0.9
-- python3
 - folke/snacks.nvim
 
-The bundled Python runner uses only the Python standard library.
+The plugin uses a built-in Lua HTTP client.
+Current MVP scope: plain http:// ArangoDB instances.
 
 ===============================================================================
 SETUP                                                    *arangodb.nvim-setup*
@@ -61,12 +61,11 @@ Supported options:
 
 - `connections`
 - `default_database`
-- `python_command`
-- `runner`
 - `keymaps`
 - `document_keymaps`
 - `field_sample_size`
 - `page_size`
+- `http_timeout`
 - `legacy_globals`
 
 Environment variables:
@@ -111,7 +110,7 @@ Run:
   :checkhealth arangodb
 <
 
-The healthcheck verifies the Python executable, the bundled runner script,
-`snacks.nvim`, and available database candidates.
+The healthcheck verifies the Lua HTTP transport, `snacks.nvim`, and available
+database candidates.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

@@ -1,4 +1,5 @@
 local health = vim.health
+local uv = vim.uv or vim.loop
 
 local start = health.start or health.report_start
 local ok = health.ok or health.report_ok
@@ -22,23 +23,18 @@ function M.check()
 
   start("arangodb.nvim")
 
-  info("python command: `" .. core.python_command_display() .. "`")
+  info("transport: `" .. core.transport_display() .. "`")
+  info("http timeout: `" .. tostring(config.http_timeout or 30000) .. "ms`")
 
-  local binary = core.python_binary()
-  if vim.fn.executable(binary) == 1 then
-    ok("python executable found: `" .. binary .. "`")
+  if uv then
+    ok("libuv transport available")
   else
-    error("python executable not found: `" .. binary .. "`", {
-      "Set `python_command` in `require('arangodb').setup()`.",
-    })
+    error("libuv transport unavailable")
   end
 
-  local runner = core.runner_script()
-  if runner and core.script_exists() then
-    ok("runner script found: `" .. runner .. "`")
-  else
-    error("runner script not found", {
-      "Make sure the plugin is installed with `python/arango_browser.py`.",
+  if config.python_command ~= nil or config.runner ~= nil then
+    warn("Legacy Python options are ignored", {
+      "Remove `python_command` and `runner` from `require('arangodb').setup()`.",
     })
   end
 

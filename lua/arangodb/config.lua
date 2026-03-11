@@ -3,8 +3,6 @@ local M = {}
 M.defaults = {
   connections = nil,
   default_database = nil,
-  python_command = "python3",
-  runner = nil,
   keymaps = {
     browse = nil,
     resume = nil,
@@ -16,6 +14,7 @@ M.defaults = {
   },
   field_sample_size = 200,
   page_size = 50,
+  http_timeout = 30000,
   legacy_globals = true,
 }
 

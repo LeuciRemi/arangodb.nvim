@@ -1,7 +1,5 @@
 local M = {}
 
-local uv = vim.uv or vim.loop
-
 local function is_list(value)
   if vim.islist then
     return vim.islist(value)
@@ -31,17 +29,6 @@ local function plugin_config()
   return require("arangodb.config").get()
 end
 
-local function python_base_command()
-  local command = plugin_config().python_command
-  if type(command) == "table" then
-    return vim.deepcopy(command)
-  end
-  if type(command) == "string" and command ~= "" then
-    return { command }
-  end
-  return { "python3" }
-end
-
 function M.env(name, default)
   local value = vim.env[name]
   if value == nil or value == "" then
@@ -68,39 +55,9 @@ function M.url_decode(value)
   end))
 end
 
-function M.runner_script()
-  local configured = plugin_config().runner
-  if type(configured) == "function" then
-    configured = configured()
-  end
-  if type(configured) == "string" and configured ~= "" then
-    return configured
-  end
 
-  local matches = vim.api.nvim_get_runtime_file("python/arango_browser.py", true)
-  if #matches > 0 then
-    return matches[1]
-  end
-
-  matches = vim.api.nvim_get_runtime_file("scripts/arango_browser.py", true)
-  if #matches > 0 then
-    return matches[1]
-  end
-
-  return nil
-end
-
-function M.script_exists()
-  local runner = M.runner_script()
-  return runner ~= nil and uv.fs_stat(runner) ~= nil
-end
-
-function M.python_binary()
-  return python_base_command()[1]
-end
-
-function M.python_command_display()
-  return table.concat(python_base_command(), " ")
+function M.transport_display()
+  return "built-in Lua HTTP (plain HTTP only)"
 end
 
 function M.arango_url(database)
@@ -133,58 +90,6 @@ function M.parse_connection(url)
     port = port ~= "" and port or "8529",
     database = M.url_decode(database),
   }
-end
-
-function M.python_command(config, command, extra)
-  local runner = M.runner_script()
-  if not runner then
-    error("ArangoDB runner script not found")
-  end
-
-  local cmd = python_base_command()
-  cmd[#cmd + 1] = runner
-  vim.list_extend(cmd, {
-    "--host",
-    config.host,
-    "--port",
-    config.port,
-    "--user",
-    config.user,
-    "--password",
-    config.password,
-    "--database",
-    config.database,
-    command,
-  })
-
-  for _, arg in ipairs(extra or {}) do
-    cmd[#cmd + 1] = tostring(arg)
-  end
-
-  return cmd
-end
-
-function M.run_lines(cmd)
-  local output = vim.fn.systemlist(cmd)
-  if vim.v.shell_error ~= 0 then
-    local msg = #output > 0 and table.concat(output, "\n") or "ArangoDB command failed"
-    error(msg)
-  end
-  return output
-end
-
-function M.run_json(cmd)
-  local output = vim.fn.system(cmd)
-  if vim.v.shell_error ~= 0 then
-    error(output ~= "" and output or "ArangoDB command failed")
-  end
-
-  local ok, decoded = pcall(vim.json.decode, output)
-  if not ok then
-    error("Invalid JSON from ArangoDB runner")
-  end
-
-  return decoded
 end
 
 function M.notify_error(err, title)
@@ -251,27 +156,16 @@ end
 
 function M.discover_databases()
   local fallback = { "_system" }
-  if vim.fn.executable(M.python_binary()) ~= 1 or not M.script_exists() then
-    return fallback
-  end
 
-  local cmd = python_base_command()
-  cmd[#cmd + 1] = M.runner_script()
-  vim.list_extend(cmd, {
-    "--host",
-    M.env("NVIM_ARANGO_HOST", "127.0.0.1"),
-    "--port",
-    M.env("NVIM_ARANGO_PORT", "8529"),
-    "--user",
-    M.env("NVIM_ARANGO_USER", "root"),
-    "--password",
-    M.env("NVIM_ARANGO_PASSWORD", "root"),
-    "--database",
-    "_system",
-    "databases",
-  })
-
-  local ok, output = pcall(M.run_lines, cmd)
+  local ok, output = pcall(function()
+    return require("arangodb.client").list_databases({
+      host = M.env("NVIM_ARANGO_HOST", "127.0.0.1"),
+      port = M.env("NVIM_ARANGO_PORT", "8529"),
+      user = M.env("NVIM_ARANGO_USER", "root"),
+      password = M.env("NVIM_ARANGO_PASSWORD", "root"),
+      database = "_system",
+    })
+  end)
   if not ok then
     return fallback
   end
