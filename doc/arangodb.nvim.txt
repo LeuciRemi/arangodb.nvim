@@ -1,0 +1,117 @@
+*arangodb.nvim.txt*  Browse and edit ArangoDB from Neovim
+
+===============================================================================
+CONTENTS                                                *arangodb.nvim-contents*
+
+1. Introduction ........................................ |arangodb.nvim-intro|
+2. Requirements ........................................ |arangodb.nvim-requirements|
+3. Setup ............................................... |arangodb.nvim-setup|
+4. Commands ............................................ |arangodb.nvim-commands|
+5. Health .............................................. |arangodb.nvim-health|
+
+===============================================================================
+INTRODUCTION                                              *arangodb.nvim-intro*
+
+arangodb.nvim turns an ArangoDB workflow into a reusable Neovim plugin.
+
+Main features:
+
+- browse databases and collections
+- search documents with a live picker
+- open JSON documents in regular buffers
+- save, delete, rename, and truncate from Neovim
+- jump to related documents
+
+===============================================================================
+REQUIREMENTS                                      *arangodb.nvim-requirements*
+
+- Neovim >= 0.9
+- python3
+- folke/snacks.nvim
+
+The bundled Python runner uses only the Python standard library.
+
+===============================================================================
+SETUP                                                    *arangodb.nvim-setup*
+
+Example with lazy.nvim:
+
+>lua
+  {
+    "LeuciRemi/arangodb.nvim",
+    dependencies = {
+      "folke/snacks.nvim",
+    },
+    config = function()
+      require("arangodb").setup({
+        connections = {
+          _system = "arangodb://root:root@127.0.0.1:8529/_system",
+        },
+        default_database = "_system",
+        keymaps = {
+          browse = "<leader>ea",
+          resume = "<leader>eA",
+        },
+      })
+    end,
+  }
+<
+
+Supported options:
+
+- `connections`
+- `default_database`
+- `python_command`
+- `runner`
+- `keymaps`
+- `document_keymaps`
+- `field_sample_size`
+- `page_size`
+- `legacy_globals`
+
+Environment variables:
+
+- `NVIM_ARANGO_HOST`
+- `NVIM_ARANGO_PORT`
+- `NVIM_ARANGO_USER`
+- `NVIM_ARANGO_PASSWORD`
+- `NVIM_ARANGO_SYSTEM_URL`
+- `NVIM_ARANGO_<DATABASE>_URL`
+
+===============================================================================
+COMMANDS                                              *arangodb.nvim-commands*
+
+                                                        *:ArangoBrowse*
+:ArangoBrowse [database]
+    Open the ArangoDB browser. When a database is passed, skip the database
+    picker and browse that database directly.
+
+                                                        *:ArangoResume*
+:ArangoResume
+    Reopen the last picker if it still exists.
+
+                                                *:ArangoDocumentSave*
+:ArangoDocumentSave
+    Save the current ArangoDB document buffer.
+
+                                              *:ArangoDocumentDelete*
+:ArangoDocumentDelete
+    Delete the current ArangoDB document buffer.
+
+                                             *:ArangoDocumentRelated*
+:ArangoDocumentRelated
+    Pick and open a related document from the current buffer.
+
+===============================================================================
+HEALTH                                                    *arangodb.nvim-health*
+
+Run:
+
+>vim
+  :checkhealth arangodb
+<
+
+The healthcheck verifies the Python executable, the bundled runner script,
+`snacks.nvim`, and available database candidates.
+
+vim:tw=78:ts=8:noet:ft=help:norl:
