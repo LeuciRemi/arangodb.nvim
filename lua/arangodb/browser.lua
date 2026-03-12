@@ -1493,6 +1493,11 @@ local function document_actions(config, buf)
   end, {
     desc = "Return to previous ArangoDB view",
   })
+  vim.api.nvim_create_autocmd("BufWriteCmd", {
+    buffer = buf,
+    callback = save_document,
+    desc = "Save current Arango document on :write",
+  })
 
   vim.b[buf].arangodb_actions_initialized = true
 end
@@ -1531,7 +1536,7 @@ function M.open_document(config, doc)
   set_buffer_json(buf, preview)
 
   vim.bo[buf].filetype = "json"
-  vim.bo[buf].buftype = ""
+  vim.bo[buf].buftype = "acwrite"
   vim.bo[buf].buflisted = true
   vim.bo[buf].bufhidden = "hide"
   vim.bo[buf].swapfile = false
