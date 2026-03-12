@@ -6,10 +6,12 @@ This plugin extracts the ArangoDB browser workflow from my personal config into 
 
 ## Features
 
-- Pick a database and collection from inside Neovim
+- Pick a database and manage collections from inside Neovim
 - Search documents live with `snacks.nvim`
 - Open documents in JSON buffers and save them back to ArangoDB
+- Create draft documents with prefilled `_key`, `_id`, and `_rev`, then insert them on first save
 - Jump to related documents from direct foreign keys, nested relation objects, and reverse links discovered in other collections
+- Create, rename, and truncate collections from the collections picker
 - Delete documents, rename collections, and truncate collections
 - Discover databases from environment variables or explicit connection config
 
@@ -104,13 +106,18 @@ export NVIM_ARANGO_KORE_URL='arangodb://root:root@127.0.0.1:8529/kore'
 
 ## Commands
 
-- `:ArangoBrowse` - pick a database, then browse a collection
-- `:ArangoBrowse {database}` - browse a specific database directly
+- `:ArangoBrowse` - pick a database, then open the collections picker
+- `:ArangoBrowse {database}` - open the collections picker for a specific database
 - `:ArangoResume` - reopen the current browser picker
 - `:ArangoBack` - return to the previous ArangoDB picker or document view
-- `:ArangoDocumentSave` - save the current document buffer
-- `:ArangoDocumentDelete` - delete the current document buffer
+- `:ArangoDocumentSave` - save the current document buffer, or create a draft document on first save
+- `:ArangoDocumentDelete` - delete the current document buffer, or discard a draft document
 - `:ArangoDocumentRelated` - open a related document from direct keys, nested relations, or reverse links in the current buffer
+
+## Picker actions
+
+- Collections picker: `Enter` open collection, `Ctrl-a` create a draft document, `Ctrl-n` create a collection, `Ctrl-r` rename a collection, `Ctrl-t` truncate a collection, `Ctrl-x` open the actions menu, `Ctrl-b` go back to the database picker when available
+- Documents picker: `Ctrl-a` create a draft document in the current collection, `Ctrl-x` open the document actions menu
 
 ## Lua API
 

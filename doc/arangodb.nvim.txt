@@ -17,8 +17,10 @@ arangodb.nvim turns an ArangoDB workflow into a reusable Neovim plugin.
 Main features:
 
 - browse databases and collections
+- manage collections from a dedicated picker
 - search documents with a live picker
 - open JSON documents in regular buffers
+- create draft documents and insert them on first save
 - save, delete, rename, and truncate from Neovim
 - jump to related documents from direct foreign keys, relation objects, and reverse links
 
@@ -83,7 +85,19 @@ COMMANDS                                              *arangodb.nvim-commands*
                                                         *:ArangoBrowse*
 :ArangoBrowse [database]
     Open the ArangoDB browser. When a database is passed, skip the database
-    picker and browse that database directly.
+    picker and open the collections picker for that database directly.
+
+    Collections picker actions:
+    - <Enter> opens the selected collection
+    - <C-a> opens a draft document buffer for the selected collection
+    - <C-n> creates a collection
+    - <C-r> renames the selected collection
+    - <C-t> truncates the selected collection
+    - <C-x> opens the collection actions menu
+    - <C-b> returns to the database picker when the current view came from it
+
+    In document listings, <C-x> only opens document actions. Collection
+    management stays in the collections picker.
 
                                                         *:ArangoResume*
 :ArangoResume
@@ -95,11 +109,13 @@ COMMANDS                                              *arangodb.nvim-commands*
 
                                                 *:ArangoDocumentSave*
 :ArangoDocumentSave
-    Save the current ArangoDB document buffer.
+    Save the current ArangoDB document buffer. Draft buffers are inserted into
+    ArangoDB on their first save.
 
                                               *:ArangoDocumentDelete*
 :ArangoDocumentDelete
-    Delete the current ArangoDB document buffer.
+    Delete the current ArangoDB document buffer. For draft buffers, this
+    discards the draft without sending a delete request.
 
                                              *:ArangoDocumentRelated*
 :ArangoDocumentRelated
