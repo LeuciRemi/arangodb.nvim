@@ -1,5 +1,18 @@
 local M = {}
 
+local URL_SCHEMES = {
+  arangodb = "http",
+  http = "http",
+  https = "https",
+  ["arangodb+http"] = "http",
+  ["arangodb+https"] = "https",
+}
+
+local ENV_SCHEME_ALIASES = {
+  ssl = "https",
+  tls = "https",
+}
+
 local function is_list(value)
   if vim.islist then
     return vim.islist(value)
@@ -55,9 +68,36 @@ function M.url_decode(value)
   end))
 end
 
+local function normalize_scheme(value, allow_env_aliases)
+  if type(value) ~= "string" or value == "" then
+    return nil
+  end
+
+  local lowered = value:lower()
+  local normalized = URL_SCHEMES[lowered]
+  if normalized ~= nil then
+    return normalized
+  end
+
+  if allow_env_aliases then
+    return ENV_SCHEME_ALIASES[lowered]
+  end
+end
+
+function M.default_transport_scheme()
+  return normalize_scheme(M.env("NVIM_ARANGO_SCHEME", "http"), true) or "http"
+end
+
+function M.https_transport_available()
+  return vim.fn.executable("curl") == 1
+end
+
 
 function M.transport_display()
-  return "built-in Lua HTTP (plain HTTP only)"
+  if M.https_transport_available() then
+    return "built-in Lua HTTP for http:// and arangodb://, curl for https://"
+  end
+  return "built-in Lua HTTP for http:// and arangodb:// (install curl for https://)"
 end
 
 function M.arango_url(database)
@@ -67,8 +107,12 @@ function M.arango_url(database)
     return explicit
   end
 
+  local scheme = M.default_transport_scheme()
+  local url_scheme = scheme == "https" and "https" or "arangodb"
+
   return string.format(
-    "arangodb://%s:%s@%s:%s/%s",
+    "%s://%s:%s@%s:%s/%s",
+    url_scheme,
     M.url_encode(M.env("NVIM_ARANGO_USER", "root")),
     M.url_encode(M.env("NVIM_ARANGO_PASSWORD", "root")),
     M.env("NVIM_ARANGO_HOST", "127.0.0.1"),
@@ -78,12 +122,38 @@ function M.arango_url(database)
 end
 
 function M.parse_connection(url)
-  local user, password, host, port, database = url:match("^arangodb://([^:]+):([^@]*)@([^:/]+):?(%d*)/(.+)$")
-  if not user then
+  if type(url) ~= "string" or url == "" then
+    return nil
+  end
+
+  local raw_scheme, remainder = url:match("^([%w%+%-%.]+)://(.+)$")
+  local scheme = normalize_scheme(raw_scheme, false)
+  if not scheme then
+    return nil
+  end
+
+  local userinfo, host_path = remainder:match("^([^@]+)@(.+)$")
+  if not userinfo then
+    return nil
+  end
+
+  local user, password = userinfo:match("^([^:]+):?(.*)$")
+  if not user or user == "" then
+    return nil
+  end
+
+  local authority, database = host_path:match("^([^/]+)/(.+)$")
+  if not authority or database == "" then
+    return nil
+  end
+
+  local host, port = authority:match("^([^:]+):?(%d*)$")
+  if not host or host == "" then
     return nil
   end
 
   return {
+    scheme = scheme,
     user = M.url_decode(user),
     password = M.url_decode(password),
     host = host,
@@ -106,7 +176,7 @@ local function add_connection(items, seen, name, url)
   if type(name) ~= "string" or name == "" then
     return
   end
-  if type(url) ~= "string" or url == "" or not url:match("^arangodb://") then
+  if type(url) ~= "string" or url == "" or M.parse_connection(url) == nil then
     return
   end
   if seen[name] then
@@ -159,6 +229,7 @@ function M.discover_databases()
 
   local ok, output = pcall(function()
     return require("arangodb.client").list_databases({
+      scheme = M.default_transport_scheme(),
       host = M.env("NVIM_ARANGO_HOST", "127.0.0.1"),
       port = M.env("NVIM_ARANGO_PORT", "8529"),
       user = M.env("NVIM_ARANGO_USER", "root"),

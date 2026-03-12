@@ -15,6 +15,8 @@ M.defaults = {
   field_sample_size = 200,
   page_size = 50,
   http_timeout = 30000,
+  tls_verify = true,
+  tls_ca_file = nil,
   legacy_globals = true,
 }
 

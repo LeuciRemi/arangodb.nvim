@@ -80,9 +80,11 @@ local function decode_json_response(response)
 end
 
 local function request(config, method, path, payload)
+  local options = require("arangodb.config").get()
   local body = payload ~= nil and vim.json.encode(payload) or nil
   local response = http.request({
     method = method,
+    scheme = config.scheme,
     host = config.host,
     port = config.port,
     path = path,
@@ -90,6 +92,8 @@ local function request(config, method, path, payload)
     user = config.user,
     password = config.password,
     timeout = timeout(),
+    tls_verify = options.tls_verify,
+    tls_ca_file = options.tls_ca_file,
   })
 
   return decode_json_response(response)

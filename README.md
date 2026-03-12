@@ -19,9 +19,11 @@ This plugin extracts the ArangoDB browser workflow from my personal config into 
 
 - Neovim `>= 0.9`
 - `folke/snacks.nvim`
+- `curl` for `https://` connections
 
 The plugin now talks to ArangoDB through a built-in Lua HTTP client.
-Current MVP scope: plain `http://` ArangoDB instances for local/dev usage.
+Plain `http://` and legacy `arangodb://` URLs use the built-in Lua transport.
+`https://` URLs are supported through `curl`.
 
 ## Installation
 
@@ -59,19 +61,21 @@ Current MVP scope: plain `http://` ArangoDB instances for local/dev usage.
 require("arangodb").setup({
   connections = {
     _system = "arangodb://root:root@127.0.0.1:8529/_system",
-    kore = "arangodb://root:root@127.0.0.1:8529/kore",
+    kore = "https://root:root@db.example.com:8529/kore",
   },
   default_database = "kore",
   field_sample_size = 200,
   page_size = 50,
   http_timeout = 30000,
+  tls_verify = true,
+  tls_ca_file = nil,
   legacy_globals = true,
 })
 ```
 
 ### Options
 
-- `connections`: table of named connection URLs, either `{ name = url }` or `{ { name = "db", url = "..." } }`
+- `connections`: table of named connection URLs, either `{ name = url }` or `{ { name = "db", url = "..." } }`; accepts `arangodb://`, `http://`, and `https://`
 - `default_database`: preferred database name or `{ name, url }`
 - `keymaps.browse`: global normal-mode keymap for `require("arangodb").browse()`
 - `keymaps.resume`: global normal-mode keymap for `require("arangodb").resume()`
@@ -81,6 +85,8 @@ require("arangodb").setup({
 - `field_sample_size`: number of documents sampled when listing candidate filter fields
 - `page_size`: number of documents fetched per picker page
 - `http_timeout`: timeout in milliseconds for ArangoDB HTTP requests
+- `tls_verify`: verify HTTPS certificates when using `https://` URLs (default: `true`)
+- `tls_ca_file`: custom CA bundle path passed to `curl --cacert` for `https://` URLs
 - `legacy_globals`: also read `vim.g.arango_connections` and `vim.g.dbs`
 
 ## Environment variables
@@ -89,6 +95,7 @@ You can use environment variables instead of explicit `connections`:
 
 - `NVIM_ARANGO_HOST`
 - `NVIM_ARANGO_PORT`
+- `NVIM_ARANGO_SCHEME`
 - `NVIM_ARANGO_USER`
 - `NVIM_ARANGO_PASSWORD`
 - `NVIM_ARANGO_SYSTEM_URL`
@@ -99,9 +106,10 @@ Example:
 ```bash
 export NVIM_ARANGO_USER=root
 export NVIM_ARANGO_PASSWORD=root
-export NVIM_ARANGO_HOST=127.0.0.1
+export NVIM_ARANGO_SCHEME=https
+export NVIM_ARANGO_HOST=db.example.com
 export NVIM_ARANGO_PORT=8529
-export NVIM_ARANGO_KORE_URL='arangodb://root:root@127.0.0.1:8529/kore'
+export NVIM_ARANGO_KORE_URL='https://root:root@db.example.com:8529/kore'
 ```
 
 ## Commands
@@ -135,11 +143,12 @@ Run:
 :checkhealth arangodb
 ```
 
-It checks the built-in Lua HTTP transport, `snacks.nvim`, and detected database candidates.
+It checks the HTTP transport setup, optional HTTPS support through `curl`, `snacks.nvim`, and detected database candidates.
 
 ## Notes
 
 - This plugin currently relies on `folke/snacks.nvim` for the live picker UI.
-- The current Lua transport supports plain `http://` ArangoDB instances only.
+- Keep using `arangodb://` for legacy plain HTTP configs, or switch to `https://` for TLS-enabled instances.
+- Install `curl` to use `https://` connections.
 - Connection strings may contain credentials, so prefer environment variables if you do not want them stored in your config.
 - Add a license before making the repository fully public for reuse.
