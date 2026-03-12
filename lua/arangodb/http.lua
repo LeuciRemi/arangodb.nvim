@@ -144,38 +144,15 @@ local function parse_response(raw)
   }
 end
 
-function M.request(opts)
-  opts = opts or {}
-
-  if not uv then
-    error("Lua HTTP transport unavailable")
+local function normalize_scheme(value)
+  local scheme = tostring(value or "http"):lower()
+  if scheme ~= "http" and scheme ~= "https" then
+    error("Unsupported ArangoDB scheme: " .. tostring(value))
   end
+  return scheme
+end
 
-  local host = opts.host
-  if type(host) ~= "string" or host == "" then
-    error("Missing ArangoDB host")
-  end
-
-  local port = tonumber(opts.port)
-  if not port then
-    error("Invalid ArangoDB port: " .. tostring(opts.port))
-  end
-
-  local method = tostring(opts.method or "GET"):upper()
-  local path = tostring(opts.path or "/")
-  local timeout = tonumber(opts.timeout) or 30000
-  local body = opts.body
-
-  if path == "" then
-    path = "/"
-  elseif path:sub(1, 1) ~= "/" then
-    path = "/" .. path
-  end
-
-  if body ~= nil and type(body) ~= "string" then
-    error("HTTP request body must be a string")
-  end
-
+local function build_headers(opts, host, port, body)
   local headers = {}
   for name, value in pairs(opts.headers or {}) do
     if value ~= nil then
@@ -204,26 +181,156 @@ function M.request(opts)
     end
   end
 
-  local header_names = {}
+  return headers
+end
+
+local function sorted_header_names(headers)
+  local names = {}
   for name, _ in pairs(headers) do
-    header_names[#header_names + 1] = name
+    names[#names + 1] = name
   end
-  table.sort(header_names, function(left, right)
+  table.sort(names, function(left, right)
     return left:lower() < right:lower()
   end)
+  return names
+end
 
+local function build_request(method, path, headers, body)
   local request_parts = {
     string.format("%s %s HTTP/1.1", method, path),
   }
 
-  for _, name in ipairs(header_names) do
+  for _, name in ipairs(sorted_header_names(headers)) do
     request_parts[#request_parts + 1] = string.format("%s: %s", name, headers[name])
   end
 
   request_parts[#request_parts + 1] = ""
   request_parts[#request_parts + 1] = body or ""
 
-  local request = table.concat(request_parts, "\r\n")
+  return table.concat(request_parts, "\r\n")
+end
+
+local function format_timeout_seconds(timeout)
+  return string.format("%.3f", math.max(timeout, 1) / 1000)
+end
+
+local function run_command(args, input)
+  if vim.system then
+    local result = vim.system(args, {
+      stdin = input,
+      text = true,
+    }):wait()
+    local output = result.stdout or ""
+    if result.stderr and result.stderr ~= "" then
+      output = output .. result.stderr
+    end
+    return output, result.code or 0
+  end
+
+  local output = vim.fn.system(args, input or "")
+  return output, vim.v.shell_error
+end
+
+local function curl_request(opts, scheme, host, port, method, path, headers, body, timeout)
+  if vim.fn.executable("curl") ~= 1 then
+    error("HTTPS ArangoDB connections require `curl` to be installed")
+  end
+
+  local curl_headers = vim.deepcopy(headers)
+  if body ~= nil and curl_headers.Expect == nil and curl_headers.expect == nil then
+    curl_headers.Expect = ""
+  end
+
+  local args = {
+    "curl",
+    "--silent",
+    "--show-error",
+    "--stderr",
+    "-",
+    "--globoff",
+    "--http1.1",
+    "--include",
+    "--request",
+    method,
+    "--connect-timeout",
+    format_timeout_seconds(timeout),
+    "--max-time",
+    format_timeout_seconds(timeout),
+  }
+
+  if opts.tls_verify == false then
+    args[#args + 1] = "--insecure"
+  end
+
+  if type(opts.tls_ca_file) == "string" and opts.tls_ca_file ~= "" then
+    args[#args + 1] = "--cacert"
+    args[#args + 1] = opts.tls_ca_file
+  end
+
+  for _, name in ipairs(sorted_header_names(curl_headers)) do
+    args[#args + 1] = "--header"
+    args[#args + 1] = string.format("%s: %s", name, curl_headers[name])
+  end
+
+  if body ~= nil then
+    args[#args + 1] = "--data-binary"
+    args[#args + 1] = "@-"
+  end
+
+  args[#args + 1] = "--url"
+  args[#args + 1] = string.format("%s://%s:%d%s", scheme, host, port, path)
+
+  local output, code = run_command(args, body)
+  if code ~= 0 then
+    local message = vim.trim(output or "")
+    if message == "" then
+      message = string.format("curl exited with code %d", code)
+    end
+    error(message)
+  end
+
+  return parse_response(output)
+end
+
+function M.request(opts)
+  opts = opts or {}
+
+  if not uv then
+    error("Lua HTTP transport unavailable")
+  end
+
+  local host = opts.host
+  if type(host) ~= "string" or host == "" then
+    error("Missing ArangoDB host")
+  end
+
+  local port = tonumber(opts.port)
+  if not port then
+    error("Invalid ArangoDB port: " .. tostring(opts.port))
+  end
+
+  local method = tostring(opts.method or "GET"):upper()
+  local scheme = normalize_scheme(opts.scheme)
+  local path = tostring(opts.path or "/")
+  local timeout = tonumber(opts.timeout) or 30000
+  local body = opts.body
+
+  if path == "" then
+    path = "/"
+  elseif path:sub(1, 1) ~= "/" then
+    path = "/" .. path
+  end
+
+  if body ~= nil and type(body) ~= "string" then
+    error("HTTP request body must be a string")
+  end
+
+  local headers = build_headers(opts, host, port, body)
+  if scheme == "https" then
+    return curl_request(opts, scheme, host, port, method, path, headers, body, timeout)
+  end
+
+  local request = build_request(method, path, headers, body)
   local tcp = assert(uv.new_tcp())
   local timer = assert(uv.new_timer())
   local state = {

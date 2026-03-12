@@ -29,9 +29,10 @@ REQUIREMENTS                                      *arangodb.nvim-requirements*
 
 - Neovim >= 0.9
 - folke/snacks.nvim
+- curl for `https://` connections
 
-The plugin uses a built-in Lua HTTP client.
-Current MVP scope: plain http:// ArangoDB instances.
+The plugin uses a built-in Lua HTTP client for `arangodb://` and `http://`.
+`https://` connections are supported through `curl`.
 
 ===============================================================================
 SETUP                                                    *arangodb.nvim-setup*
@@ -68,12 +69,15 @@ Supported options:
 - `field_sample_size`
 - `page_size`
 - `http_timeout`
+- `tls_verify`
+- `tls_ca_file`
 - `legacy_globals`
 
 Environment variables:
 
 - `NVIM_ARANGO_HOST`
 - `NVIM_ARANGO_PORT`
+- `NVIM_ARANGO_SCHEME`
 - `NVIM_ARANGO_USER`
 - `NVIM_ARANGO_PASSWORD`
 - `NVIM_ARANGO_SYSTEM_URL`
@@ -131,7 +135,7 @@ Run:
   :checkhealth arangodb
 <
 
-The healthcheck verifies the Lua HTTP transport, `snacks.nvim`, and available
-database candidates.
+The healthcheck verifies the HTTP transport setup, optional HTTPS support
+through `curl`, `snacks.nvim`, and available database candidates.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

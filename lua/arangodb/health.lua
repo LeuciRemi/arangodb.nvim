@@ -20,16 +20,40 @@ end
 function M.check()
   local core = require("arangodb.core")
   local config = require("arangodb.config").get()
+  local items = core.available_databases()
+  local https_requested = false
+
+  for _, item in ipairs(items) do
+    local connection = core.parse_connection(item.url)
+    if connection and connection.scheme == "https" then
+      https_requested = true
+      break
+    end
+  end
 
   start("arangodb.nvim")
 
   info("transport: `" .. core.transport_display() .. "`")
   info("http timeout: `" .. tostring(config.http_timeout or 30000) .. "ms`")
+  info("tls verify: `" .. tostring(config.tls_verify ~= false) .. "`")
+  if type(config.tls_ca_file) == "string" and config.tls_ca_file ~= "" then
+    info("tls ca file: `" .. config.tls_ca_file .. "`")
+  end
 
   if uv then
     ok("libuv transport available")
   else
     error("libuv transport unavailable")
+  end
+
+  if core.https_transport_available() then
+    ok("curl available for HTTPS transport")
+  elseif https_requested then
+    warn("curl not found; https:// connections will fail", {
+      "Install `curl` to enable HTTPS ArangoDB connections.",
+    })
+  else
+    info("install `curl` to enable https:// connections")
   end
 
   if config.python_command ~= nil or config.runner ~= nil then
@@ -46,7 +70,6 @@ function M.check()
     })
   end
 
-  local items = core.available_databases()
   if #items > 0 then
     info("database candidates: " .. join_names(items))
   else
