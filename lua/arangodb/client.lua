@@ -119,6 +119,69 @@ local function collection_path(collection)
   return string.format("/_api/collection/%s", core.url_encode(collection))
 end
 
+local function collection_type_label(collection_type)
+  if collection_type == 2 then
+    return "document"
+  end
+  if collection_type == 3 then
+    return "edge"
+  end
+  return tostring(collection_type or "unknown")
+end
+
+local function collection_status_label(status)
+  local labels = {
+    [1] = "newborn",
+    [2] = "unloaded",
+    [3] = "loaded",
+    [4] = "loading",
+    [5] = "deleted",
+    [6] = "corrupted",
+  }
+  return labels[status] or tostring(status or "unknown")
+end
+
+local function collection_size_bytes(figures)
+  if type(figures) ~= "table" then
+    return nil
+  end
+
+  local document_size = type(figures.documentsSize) == "number" and figures.documentsSize or nil
+  local index_size = type(figures.indexSize) == "number" and figures.indexSize
+    or type(figures.indexesSize) == "number" and figures.indexesSize
+    or type(figures.indexes) == "table" and type(figures.indexes.size) == "number" and figures.indexes.size
+    or nil
+
+  if document_size or index_size then
+    return (document_size or 0) + (index_size or 0)
+  end
+
+  local size = 0
+  local found = false
+  local function add(value)
+    if type(value) == "number" then
+      size = size + value
+      found = true
+    end
+  end
+
+  if type(figures.alive) == "table" then
+    add(figures.alive.size)
+  end
+  if type(figures.dead) == "table" then
+    add(figures.dead.size)
+  end
+  if type(figures.indexes) == "table" and is_list(figures.indexes) then
+    for _, index in ipairs(figures.indexes) do
+      if type(index) == "table" then
+        add(index.size)
+      end
+    end
+  end
+
+  return found and size or nil
+end
+
 local function json_pretty(value, indent, depth)
   indent = indent or 2
   depth = depth or 0
@@ -384,18 +447,100 @@ function M.list_databases(config)
   return databases
 end
 
-function M.list_collections(config)
+function M.list_collection_details(config)
   local data = database_request(config, "GET", "/_api/collection")
   local collections = {}
 
   for _, item in ipairs(data.result or {}) do
     if not item.isSystem then
-      collections[#collections + 1] = item.name
+      collections[#collections + 1] = {
+        name = item.name,
+        id = item.id,
+        global_id = item.globallyUniqueId,
+        type = collection_type_label(item.type),
+        status = collection_status_label(item.status),
+        wait_for_sync = item.waitForSync == true,
+        cache_enabled = item.cacheEnabled == true,
+        collection = item,
+      }
     end
   end
 
-  table.sort(collections)
+  table.sort(collections, function(left, right)
+    return left.name < right.name
+  end)
   return collections
+end
+
+function M.list_collections(config)
+  local collections = M.list_collection_details(config)
+  local result = {}
+
+  for _, item in ipairs(collections) do
+    result[#result + 1] = item.name
+  end
+
+  return result
+end
+
+function M.database_overview(config)
+  local overview = {
+    name = config.database,
+    endpoint = string.format("%s:%s", tostring(config.host), tostring(config.port)),
+    collections = M.list_collection_details(config),
+  }
+
+  overview.collection_count = #overview.collections
+
+  local ok, current = pcall(database_request, config, "GET", "/_api/database/current")
+  if ok and type(current) == "table" and type(current.result) == "table" then
+    local info = current.result
+    overview.id = info.id
+    overview.path = info.path
+    overview.is_system = info.isSystem == true
+    overview.sharding = info.sharding
+    overview.replication_factor = info.replicationFactor
+    overview.write_concern = info.writeConcern
+  else
+    overview.info_error = trim_message(current)
+  end
+
+  local total_documents = 0
+  local has_total_documents = false
+  local total_size = 0
+  local has_total_size = false
+
+  for _, item in ipairs(overview.collections) do
+    local ok_figures, figures_data = pcall(database_request, config, "GET", collection_path(item.name) .. "/figures")
+    if ok_figures and type(figures_data) == "table" then
+      if type(figures_data.count) == "number" then
+        item.count = figures_data.count
+        total_documents = total_documents + figures_data.count
+        has_total_documents = true
+      end
+
+      local figures = figures_data.figures
+      local size = collection_size_bytes(figures)
+      if type(size) == "number" then
+        item.size = size
+        total_size = total_size + size
+        has_total_size = true
+      end
+
+      item.engine = type(figures) == "table" and figures.engine or figures_data.engine
+    else
+      item.figures_error = trim_message(figures_data)
+    end
+  end
+
+  if has_total_documents then
+    overview.total_documents = total_documents
+  end
+  if has_total_size then
+    overview.total_size = total_size
+  end
+
+  return overview
 end
 
 function M.list_fields(config, collection, sample_size)
@@ -464,6 +609,82 @@ function M.delete_document(config, document_id)
     key = key,
     collection = collection,
     meta = deleted,
+  }
+end
+
+local function sanitize_new_document(collection, document)
+  if type(document) ~= "table" then
+    error("Document payload must be a JSON object")
+  end
+
+  collection = type(collection) == "string" and vim.trim(collection) or ""
+  if collection == "" then
+    local document_id = type(document._id) == "string" and document._id or nil
+    collection = document_id and document_id:match("^([^/]+)/") or ""
+  end
+  if collection == "" then
+    error("Missing collection name")
+  end
+
+  local key = type(document._key) == "string" and vim.trim(document._key) or ""
+  if key == "" then
+    error("Document payload must contain _key")
+  end
+
+  local payload = vim.deepcopy(document)
+  payload._id = nil
+  if payload._rev == vim.NIL or payload._rev == "" then
+    payload._rev = nil
+  end
+
+  return collection, key, payload
+end
+
+local function collection_type_code(collection_type)
+  local normalized = type(collection_type) == "string" and vim.trim(collection_type):lower() or "document"
+  if normalized == "" or normalized == "document" then
+    return "document", 2
+  end
+  if normalized == "edge" then
+    return "edge", 3
+  end
+
+  error("Collection type must be 'document' or 'edge'")
+end
+
+function M.create_document(config, collection, document)
+  local target_collection, key, payload = sanitize_new_document(collection, document)
+  local created = database_request(config, "POST", "/_api/document/" .. core.url_encode(target_collection), payload)
+  local current = get_document_raw(config, target_collection, created._key or key)
+
+  return {
+    database = config.database,
+    id = current._id,
+    key = current._key,
+    collection = target_collection,
+    meta = created,
+    document = current,
+    preview = json_pretty(current),
+  }
+end
+
+function M.create_collection(config, collection, collection_type)
+  collection = vim.trim(collection or "")
+  if collection == "" then
+    error("Missing collection name")
+  end
+
+  local normalized_type, type_code = collection_type_code(collection_type)
+  local created = database_request(config, "POST", "/_api/collection", {
+    name = collection,
+    type = type_code,
+  })
+
+  return {
+    database = config.database,
+    name = created.name or collection,
+    type = normalized_type,
+    collection = created,
   }
 end
 

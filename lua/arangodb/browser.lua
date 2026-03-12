@@ -35,7 +35,9 @@ local state = {
 
 local ns = vim.api.nvim_create_namespace("arangodb.nvim")
 local browse_collection
+local browse_collections
 local go_back
+local open_new_document
 
 local function plugin_options()
   return require("arangodb.config").get()
@@ -49,6 +51,35 @@ local function get_snacks()
 
   arango.notify_error("`folke/snacks.nvim` is required to use the ArangoDB browser")
   return nil
+end
+
+local function hrtime()
+  local uv = vim.uv or vim.loop
+  if uv and uv.hrtime then
+    return uv.hrtime()
+  end
+  return math.floor(vim.fn.reltimefloat(vim.fn.reltime()) * 1000000000)
+end
+
+local function generate_uuid()
+  local seed = table.concat({
+    tostring(hrtime()),
+    tostring(vim.fn.localtime()),
+    tostring(vim.fn.getpid()),
+    tostring({}),
+    tostring(math.random()),
+  }, ":")
+  local hash = vim.fn.sha256(seed)
+  local variant = ({ "8", "9", "a", "b" })[(tonumber(hash:sub(17, 17), 16) % 4) + 1]
+  return string.format(
+    "%s-%s-4%s-%s%s-%s",
+    hash:sub(1, 8),
+    hash:sub(9, 12),
+    hash:sub(13, 15),
+    variant,
+    hash:sub(18, 20),
+    hash:sub(21, 32)
+  )
 end
 
 local function parse_extra(extra)
@@ -94,6 +125,12 @@ local function run_json(config, subcommand, extra)
   end
   if subcommand == "delete" then
     return client.delete_document(config, options.id)
+  end
+  if subcommand == "create-document" then
+    return client.create_document(config, options.collection, options.data)
+  end
+  if subcommand == "create-collection" then
+    return client.create_collection(config, options.collection, options.type)
   end
   if subcommand == "rename-collection" then
     return client.rename_collection(config, options.collection, options.name)
@@ -218,6 +255,13 @@ local function restore_picker_input_focus(picker)
   end)
 end
 
+local function set_picker_search(picker, value)
+  if not picker or picker.closed or not picker.input then
+    return
+  end
+  picker.input:set(nil, value or "")
+end
+
 local function field_label(field)
   if type(field) == "table" then
     return table.concat(field, ", ")
@@ -276,6 +320,149 @@ local function prompt_input(opts, callback)
   end)
 end
 
+local function collection_picker_title(database, search, allow_database_back)
+  local hint = allow_database_back and "  [^X actions  ^B back]" or "  [^X actions]"
+  if search and search ~= "" then
+    return string.format("Arango %s collections - %s%s", database, search, hint)
+  end
+  return string.format("Arango %s collections%s", database, hint)
+end
+
+local function format_count(value)
+  if type(value) ~= "number" then
+    return "unavailable"
+  end
+
+  local text = tostring(math.floor(value + 0.5))
+  local groups = {}
+  while #text > 3 do
+    groups[#groups + 1] = text:sub(-3)
+    text = text:sub(1, -4)
+  end
+  groups[#groups + 1] = text
+
+  local formatted = {}
+  for index = #groups, 1, -1 do
+    formatted[#formatted + 1] = groups[index]
+  end
+  return table.concat(formatted, " ")
+end
+
+local function format_bytes(value)
+  if type(value) ~= "number" then
+    return "unavailable"
+  end
+
+  local units = { "B", "KB", "MB", "GB", "TB" }
+  local size = value
+  local unit = 1
+  while size >= 1024 and unit < #units do
+    size = size / 1024
+    unit = unit + 1
+  end
+
+  if unit == 1 then
+    return string.format("%d %s", size, units[unit])
+  end
+  return string.format("%.1f %s", size, units[unit])
+end
+
+local function format_flag(value)
+  if value == nil then
+    return "n/a"
+  end
+  return value and "yes" or "no"
+end
+
+local function preview_line(label, value)
+  if value == nil or value == "" then
+    return nil
+  end
+  return string.format("%-14s %s", label .. ":", value)
+end
+
+local function collection_preview_text(config, collection, meta)
+  local overview = meta.overview or {}
+  local details = meta.collection_lookup and meta.collection_lookup[collection] or nil
+  local lines = {
+    "Database",
+    preview_line("Name", overview.name or config.database),
+    preview_line("Endpoint", overview.endpoint or string.format("%s:%s", tostring(config.host), tostring(config.port))),
+    preview_line("Collections", format_count(overview.collection_count or meta.collection_count)),
+    preview_line("Documents", format_count(overview.total_documents)),
+    preview_line("Approx. size", format_bytes(overview.total_size)),
+    preview_line("Path", overview.path),
+    preview_line("Sharding", overview.sharding),
+    preview_line("Repl. factor", overview.replication_factor),
+    preview_line("Write concern", overview.write_concern),
+    "",
+    "Selected collection",
+    preview_line("Name", collection),
+    preview_line("Type", details and details.type or nil),
+    preview_line("Status", details and details.status or nil),
+    preview_line("Documents", details and format_count(details.count) or "unavailable"),
+    preview_line("Approx. size", details and format_bytes(details.size) or "unavailable"),
+    preview_line("WaitForSync", details and format_flag(details.wait_for_sync) or nil),
+    preview_line("Cache", details and format_flag(details.cache_enabled) or nil),
+    preview_line("Engine", details and details.engine or nil),
+    preview_line("Id", details and details.id or nil),
+  }
+
+  local result = {}
+  for _, line in ipairs(lines) do
+    if line ~= nil then
+      result[#result + 1] = line
+    end
+  end
+
+  return table.concat(result, "\n")
+end
+
+local function collection_route(config, collection, field, search)
+  return {
+    kind = "collection",
+    config = config,
+    collection = collection,
+    field = field or "_key",
+    search = search or "",
+  }
+end
+
+local function collections_route(config, opts, search)
+  opts = opts or {}
+  return {
+    kind = "collections",
+    config = config,
+    search = search or "",
+    document_field = opts.document_field or "_key",
+    document_search = opts.document_search or "",
+    allow_database_back = opts.allow_database_back == true,
+  }
+end
+
+local function draft_document_id(collection, key)
+  return string.format("%s/%s", collection, key)
+end
+
+local function draft_document_payload(collection, key)
+  return {
+    _id = draft_document_id(collection, key),
+    _key = key,
+    _rev = vim.NIL,
+  }
+end
+
+local function draft_document_preview(collection, key)
+  local document_id = draft_document_id(collection, key)
+  return table.concat({
+    "{",
+    string.format('  "_id": %s,', vim.json.encode(document_id)),
+    string.format('  "_key": %s,', vim.json.encode(key)),
+    '  "_rev": null',
+    "}",
+  }, "\n")
+end
+
 local function picker_current_item(current, item)
   if item and item.item then
     return item
@@ -297,7 +484,11 @@ local function arangodb_document_buffers(opts)
   local buffers = {}
 
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-    if vim.api.nvim_buf_is_valid(buf) and vim.b[buf].arangodb_document_id then
+    local is_draft = vim.b[buf].arangodb_document_is_new == true
+    local has_document = vim.b[buf].arangodb_document_id ~= nil or (
+      opts.include_drafts ~= false and is_draft and vim.b[buf].arangodb_document_collection ~= nil
+    )
+    if vim.api.nvim_buf_is_valid(buf) and has_document then
       local matches = true
       if opts.database and vim.b[buf].arangodb_database ~= opts.database then
         matches = false
@@ -306,6 +497,9 @@ local function arangodb_document_buffers(opts)
         matches = false
       end
       if opts.id and vim.b[buf].arangodb_document_id ~= opts.id then
+        matches = false
+      end
+      if opts.include_drafts == false and is_draft then
         matches = false
       end
 
@@ -353,15 +547,21 @@ local function confirm_delete_document(document_id)
   ) == 1
 end
 
-local function confirm_collection_name(action, collection, callback)
-  prompt_input({
+local function confirm_collection_name(action, collection, callback, picker)
+  vim.ui.input({
     prompt = string.format("Type %s to %s: ", collection, action),
   }, function(value)
+    if value == nil then
+      restore_picker_input_focus(picker)
+      return
+    end
     if vim.trim(value) ~= collection then
       vim.notify("Confirmation does not match collection name", vim.log.levels.WARN, { title = "ArangoDB" })
+      restore_picker_input_focus(picker)
       return
     end
     callback()
+    restore_picker_input_focus(picker)
   end)
 end
 
@@ -380,19 +580,109 @@ local function choose_database(callback)
   }, callback)
 end
 
-local function choose_collection(config, callback)
-  local collections = try_lines(config, "ArangoDB", "collections")
-  if not collections then
-    return
-  end
-  if #collections == 0 then
-    vim.notify("No collections found in " .. config.database, vim.log.levels.WARN)
+local function prompt_collection_type(picker, callback)
+  vim.ui.select({ "document", "edge" }, {
+    prompt = "Collection type",
+  }, function(choice)
+    if choice then
+      callback(choice)
+    end
+    restore_picker_input_focus(picker)
+  end)
+end
+
+local function create_collection_with_prompt(config, picker, callback)
+  vim.ui.input({
+    prompt = string.format("Create collection in %s: ", config.database),
+  }, function(value)
+    local collection = value and vim.trim(value) or ""
+    if value == nil or collection == "" then
+      restore_picker_input_focus(picker)
+      return
+    end
+
+    prompt_collection_type(picker, function(collection_type)
+      local result = try_json(config, "ArangoDB Create Collection", "create-collection", {
+        "--collection",
+        collection,
+        "--type",
+        collection_type,
+      })
+      if result and callback then
+        callback(result, collection, collection_type)
+      end
+    end)
+  end)
+end
+
+local function rename_collection_with_prompt(config, collection, callback, picker)
+  if not ensure_unmodified_document_buffers({
+    database = config.database,
+    collection = collection,
+  }, "renaming this collection") then
+    restore_picker_input_focus(picker)
     return
   end
 
-  prompt_select(collections, {
-    prompt = string.format("Collection (%s)", config.database),
-  }, callback)
+  vim.ui.input({
+    prompt = string.format("Rename collection %s to: ", collection),
+    default = collection,
+  }, function(value)
+    local new_name = value and vim.trim(value) or ""
+    if value == nil or new_name == "" or new_name == collection then
+      restore_picker_input_focus(picker)
+      return
+    end
+
+    local previous = collection
+    local result = try_json(config, "ArangoDB Rename Collection", "rename-collection", {
+      "--collection",
+      previous,
+      "--name",
+      new_name,
+    })
+    if not result then
+      restore_picker_input_focus(picker)
+      return
+    end
+
+    local final_name = result.name or new_name
+    refresh_collection_document_buffers(config, previous, final_name)
+    if callback then
+      callback(result, final_name, previous)
+    end
+    restore_picker_input_focus(picker)
+  end)
+end
+
+local function truncate_collection_with_prompt(config, collection, callback, picker)
+  if not ensure_unmodified_document_buffers({
+    database = config.database,
+    collection = collection,
+  }, "truncating this collection") then
+    restore_picker_input_focus(picker)
+    return
+  end
+
+  confirm_collection_name("truncate this collection", collection, function()
+    local result = try_json(config, "ArangoDB Truncate Collection", "truncate-collection", {
+      "--collection",
+      collection,
+    })
+    if not result then
+      restore_picker_input_focus(picker)
+      return
+    end
+
+    close_document_buffers({
+      database = config.database,
+      collection = collection,
+      include_drafts = false,
+    })
+    if callback then
+      callback(result)
+    end
+  end, picker)
 end
 
 local function choose_field(config, collection, picker, callback)
@@ -468,16 +758,34 @@ local function refresh_collection_document_buffers(config, old_collection, new_c
     database = config.database,
     collection = old_collection,
   })) do
-    local document_id = vim.b[buf].arangodb_document_id
-    local key = type(document_id) == "string" and document_id:match("^[^/]+/(.+)$") or nil
-    if key then
-      local payload = try_json(config, "ArangoDB Rename Collection", "get", { "--id", new_collection .. "/" .. key })
-      if payload then
-        M.open_document(config, vim.tbl_extend("force", payload, {
+    if vim.b[buf].arangodb_document_is_new == true then
+      local ok, payload = pcall(get_current_document_payload, buf)
+      local key = ok and vim.trim(payload._key or "") or nil
+      if key and key ~= "" then
+        M.open_document(config, {
           database = config.database,
+          id = draft_document_id(new_collection, key),
+          key = key,
+          collection = new_collection,
+          document = draft_document_payload(new_collection, key),
+          preview = draft_document_preview(new_collection, key),
           buf = buf,
           show = false,
-        }))
+          is_new = true,
+        })
+      end
+    else
+      local document_id = vim.b[buf].arangodb_document_id
+      local key = type(document_id) == "string" and document_id:match("^[^/]+/(.+)$") or nil
+      if key then
+        local payload = try_json(config, "ArangoDB Rename Collection", "get", { "--id", new_collection .. "/" .. key })
+        if payload then
+          M.open_document(config, vim.tbl_extend("force", payload, {
+            database = config.database,
+            buf = buf,
+            show = false,
+          }))
+        end
       end
     end
   end
@@ -993,6 +1301,16 @@ local function open_route(route)
     return
   end
 
+  if route.kind == "collections" then
+    browse_collections(route.config, {
+      search = route.search or "",
+      document_field = route.document_field or "_key",
+      document_search = route.document_search or "",
+      allow_database_back = route.allow_database_back == true,
+    })
+    return
+  end
+
   if route.kind == "document" then
     local payload = try_json(route.config, "ArangoDB", "get", { "--id", route.id })
     if payload then
@@ -1071,16 +1389,29 @@ local function document_actions(config, buf)
       return
     end
 
-    local result = try_call("ArangoDB Save", client.save_document, config, payload)
+    local is_new = vim.b[buf].arangodb_document_is_new == true
+    local action = is_new and "ArangoDB Create" or "ArangoDB Save"
+    local result
+    if is_new then
+      result = try_call(action, client.create_document, config, vim.b[buf].arangodb_document_collection, payload)
+    else
+      result = try_call(action, client.save_document, config, payload)
+    end
     if not result then
       return
     end
 
     M.open_document(config, vim.tbl_extend("force", result, { database = config.database, buf = buf }))
-    vim.notify("Document saved", vim.log.levels.INFO)
+    refresh_picker()
+    vim.notify(is_new and "Document created" or "Document saved", vim.log.levels.INFO)
   end
 
   local function open_related_picker()
+    if vim.b[buf].arangodb_document_is_new == true then
+      vim.notify("Save the draft document before browsing related documents", vim.log.levels.INFO)
+      return
+    end
+
     local ok, payload = pcall(get_current_document_payload, buf)
     if not ok then
       arango.notify_error(payload, "ArangoDB Relations")
@@ -1101,6 +1432,15 @@ local function document_actions(config, buf)
   end
 
   local function delete_document()
+    if vim.b[buf].arangodb_document_is_new == true then
+      if vim.fn.confirm("Discard this draft document?", "&Discard\n&Cancel", 2) ~= 1 then
+        return
+      end
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+      vim.notify("Draft document discarded", vim.log.levels.INFO)
+      return
+    end
+
     local document_id = vim.b[buf].arangodb_document_id
     if not document_id then
       arango.notify_error("Missing current document id", "ArangoDB Delete")
@@ -1111,7 +1451,7 @@ local function document_actions(config, buf)
       return
     end
 
-    if not ensure_unmodified_document_buffers({ id = document_id }, "deleting this document") then
+    if not ensure_unmodified_document_buffers({ id = document_id, include_drafts = false }, "deleting this document") then
       return
     end
 
@@ -1120,7 +1460,7 @@ local function document_actions(config, buf)
       return
     end
 
-    close_document_buffers({ id = document_id })
+    close_document_buffers({ id = document_id, include_drafts = false })
     refresh_picker()
     vim.notify("Document deleted", vim.log.levels.INFO)
   end
@@ -1158,12 +1498,23 @@ local function document_actions(config, buf)
 end
 
 function M.open_document(config, doc)
+  doc = doc or {}
+  local document_id = doc.id or doc._id
+  local collection = doc.collection or (type(document_id) == "string" and document_id:match("^([^/]+)/")) or nil
+  local key = doc.key or (type(document_id) == "string" and document_id:match("^[^/]+/(.+)$")) or nil
+  local database = doc.database or config.database
+  local is_new = doc.is_new == true
+  local display_id = document_id or (collection and key and draft_document_id(collection, key)) or collection or "draft"
+
   local buf
   local target = doc.buf
   if target and vim.api.nvim_buf_is_valid(target) then
     buf = target
   else
-    buf = vim.fn.bufadd(document_buffer_name(doc))
+    buf = vim.fn.bufadd(document_buffer_name({
+      database = database,
+      id = display_id,
+    }))
   end
 
   local preview = doc.preview
@@ -1173,7 +1524,10 @@ function M.open_document(config, doc)
   preview = preview or "{}"
 
   vim.fn.bufload(buf)
-  pcall(vim.api.nvim_buf_set_name, buf, document_buffer_name(doc))
+  pcall(vim.api.nvim_buf_set_name, buf, document_buffer_name({
+    database = database,
+    id = display_id,
+  }))
   set_buffer_json(buf, preview)
 
   vim.bo[buf].filetype = "json"
@@ -1186,15 +1540,16 @@ function M.open_document(config, doc)
 
   vim.b[buf].arangodb_config = config
   vim.b[buf].arangodb_document = doc.document
-  vim.b[buf].arangodb_document_id = doc.id
-  vim.b[buf].arangodb_document_collection = doc.collection
-  vim.b[buf].arangodb_database = doc.database or config.database
+  vim.b[buf].arangodb_document_id = display_id
+  vim.b[buf].arangodb_document_collection = collection
+  vim.b[buf].arangodb_database = database
+  vim.b[buf].arangodb_document_is_new = is_new
 
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, {
     virt_text = {
-      { string.format(" ArangoDB %s/%s ", vim.b[buf].arangodb_database, doc.id), "Title" },
-      { "  :ArangoDocumentSave  :ArangoDocumentDelete  :ArangoDocumentRelated", "Comment" },
+      { string.format(" ArangoDB%s %s/%s ", is_new and " draft" or "", vim.b[buf].arangodb_database, display_id), "Title" },
+      { is_new and "  :ArangoDocumentSave  :ArangoDocumentDelete" or "  :ArangoDocumentSave  :ArangoDocumentDelete  :ArangoDocumentRelated", "Comment" },
     },
     virt_text_pos = "right_align",
   })
@@ -1208,6 +1563,20 @@ function M.open_document(config, doc)
   end
 end
 
+open_new_document = function(config, collection, opts)
+  local key = generate_uuid()
+  local payload = draft_document_payload(collection, key)
+  M.open_document(config, vim.tbl_extend("force", {
+    database = config.database,
+    id = payload._id,
+    key = key,
+    collection = collection,
+    document = payload,
+    preview = draft_document_preview(collection, key),
+    is_new = true,
+  }, opts or {}))
+end
+
 local function item_text(item)
   return string.format("%s  %s", item.key or "?", item.field_value_text or "")
 end
@@ -1215,6 +1584,291 @@ end
 local function update_picker_title(picker, meta)
   picker.title = title(meta.database, meta.collection, meta.field, meta)
   picker:update_titles()
+end
+
+local function update_collection_picker_title(picker, config, search, allow_database_back)
+  picker.title = collection_picker_title(config.database, search or "", allow_database_back)
+  picker:update_titles()
+end
+
+browse_collections = function(config, opts)
+  local snacks = get_snacks()
+  if not snacks then
+    return
+  end
+
+  opts = opts or {}
+  local meta = {
+    search = opts.search or "",
+    collection_count = 0,
+    overview = nil,
+    overview_loaded = false,
+    collection_lookup = nil,
+  }
+
+  local function current_search(current)
+    if current and current.input and current.input.filter and type(current.input.filter.search) == "string" then
+      return current.input.filter.search
+    end
+    return meta.search or ""
+  end
+
+  local function clear_collection_overview()
+    meta.overview = nil
+    meta.overview_loaded = false
+    meta.collection_lookup = nil
+  end
+
+  local function ensure_collection_overview(collections)
+    meta.collection_count = #collections
+    if meta.overview_loaded then
+      return
+    end
+
+    meta.overview_loaded = true
+    local ok, overview = pcall(client.database_overview, config)
+    if not ok or type(overview) ~= "table" then
+      meta.overview = {
+        name = config.database,
+        endpoint = string.format("%s:%s", tostring(config.host), tostring(config.port)),
+        collection_count = #collections,
+      }
+      return
+    end
+
+    meta.overview = overview
+    meta.collection_count = overview.collection_count or #collections
+    meta.collection_lookup = {}
+    for _, item in ipairs(overview.collections or {}) do
+      meta.collection_lookup[item.name] = item
+    end
+  end
+
+  local function collection_items(search)
+    local collections = try_lines(config, "ArangoDB", "collections")
+    if not collections then
+      error("Failed to load ArangoDB collections")
+    end
+    ensure_collection_overview(collections)
+
+    local query = string.lower(vim.trim(search or ""))
+    meta.search = search or ""
+
+    local items = {}
+    for _, collection in ipairs(collections) do
+      if query == "" or string.lower(collection):find(query, 1, true) ~= nil then
+        items[#items + 1] = {
+          text = collection,
+          item = {
+            name = collection,
+            database = config.database,
+          },
+          preview = {
+            text = collection_preview_text(config, collection, meta),
+            ft = "text",
+            loc = false,
+          },
+        }
+      end
+    end
+    return items
+  end
+
+  local function selected_collection(current, item)
+    local selected = picker_current_item(current, item)
+    if not selected or not selected.item then
+      return nil
+    end
+    return selected.item.name
+  end
+
+  local function open_collection(current, item)
+    local collection = selected_collection(current, item)
+    if not collection then
+      return
+    end
+
+    push_history(collections_route(config, opts, current_search(current)))
+    close_picker(current)
+    browse_collection(config, collection, opts.document_field or "_key", opts.document_search or "")
+  end
+
+  local function create_document(current, item)
+    local collection = selected_collection(current, item)
+    if not collection then
+      vim.notify("Select a collection first", vim.log.levels.INFO)
+      return
+    end
+
+    push_history(collections_route(config, opts, current_search(current)))
+    push_history(collection_route(config, collection, opts.document_field or "_key", opts.document_search or ""))
+    close_picker(current)
+    open_new_document(config, collection)
+  end
+
+  local function open_action_menu(current, item)
+    local collection = selected_collection(current, item)
+    local choices = {}
+
+    if collection then
+      choices[#choices + 1] = { label = "Open collection (Enter)", action = "arango_open_collection" }
+      choices[#choices + 1] = { label = "Rename collection (Ctrl-r)", action = "arango_rename_collection" }
+      choices[#choices + 1] = { label = "Truncate collection (Ctrl-t)", action = "arango_truncate_collection" }
+    end
+    choices[#choices + 1] = { label = "Create collection (Ctrl-n)", action = "arango_create_collection" }
+    if opts.allow_database_back then
+      choices[#choices + 1] = { label = "Choose database (Ctrl-b)", action = "arango_pick_database" }
+    end
+
+    vim.schedule(function()
+      vim.ui.select(choices, {
+        prompt = string.format("Collection actions (%s)", config.database),
+        format_item = function(choice)
+          return choice.label
+        end,
+      }, function(choice)
+        if not choice or not current or current.closed then
+          return
+        end
+        execute_picker_action(current, choice.action)
+      end)
+    end)
+  end
+
+  local function pick_database(current)
+    if not opts.allow_database_back then
+      vim.notify("Database picker is not available in this view", vim.log.levels.INFO)
+      return
+    end
+
+    close_picker(current)
+    M.open({
+      field = opts.document_field or "_key",
+      search = opts.document_search or "",
+    })
+  end
+
+  local picker
+  picker = snacks.picker({
+    title = collection_picker_title(config.database, meta.search, opts.allow_database_back == true),
+    search = meta.search,
+    find = false,
+    live = true,
+    supports_live = true,
+    show_empty = true,
+    auto_close = false,
+    focus = "input",
+    layout = {
+      preset = "vertical",
+      preview = true,
+    },
+    finder = function(_, ctx)
+      local search = ctx.filter.search or ""
+      local ok, items = pcall(collection_items, search)
+      if not ok then
+        vim.schedule(function()
+          arango.notify_error(items, "ArangoDB")
+        end)
+        return {}
+      end
+      return items
+    end,
+    format = "text",
+    preview = "preview",
+    confirm = function(current, item)
+      open_collection(current, item)
+    end,
+    on_show = function(current)
+      state.picker = current
+      update_collection_picker_title(current, config, current_search(current), opts.allow_database_back == true)
+    end,
+    on_change = function(current)
+      state.picker = current
+      update_collection_picker_title(current, config, current_search(current), opts.allow_database_back == true)
+    end,
+    on_close = function()
+      if state.picker == picker then
+        state.picker = nil
+      end
+    end,
+    actions = {
+      arango_open_collection = function(current, item)
+        open_collection(current, item)
+      end,
+      arango_create_document = function(current, item)
+        create_document(current, item)
+      end,
+      arango_create_collection = function(current)
+        create_collection_with_prompt(config, current, function(result, collection)
+          clear_collection_overview()
+          set_picker_search(current, result.name or collection)
+          refresh_picker(current)
+          vim.notify(string.format("Collection %s created", result.name or collection), vim.log.levels.INFO)
+        end)
+      end,
+      arango_rename_collection = function(current, item)
+        local collection = selected_collection(current, item)
+        if not collection then
+          vim.notify("Select a collection first", vim.log.levels.INFO)
+          return
+        end
+
+        rename_collection_with_prompt(config, collection, function(_, new_name)
+          clear_collection_overview()
+          set_picker_search(current, new_name)
+          refresh_picker(current)
+          vim.notify(string.format("Collection renamed to %s", new_name), vim.log.levels.INFO)
+        end, current)
+      end,
+      arango_truncate_collection = function(current, item)
+        local collection = selected_collection(current, item)
+        if not collection then
+          vim.notify("Select a collection first", vim.log.levels.INFO)
+          return
+        end
+
+        truncate_collection_with_prompt(config, collection, function()
+          clear_collection_overview()
+          refresh_picker(current)
+          vim.notify(string.format("Collection %s truncated", collection), vim.log.levels.INFO)
+        end, current)
+      end,
+      arango_pick_database = function(current)
+        pick_database(current)
+      end,
+      arango_action_menu = function(current, item)
+        open_action_menu(current, item)
+      end,
+    },
+    win = {
+      input = {
+        keys = {
+          ["<c-x>"] = { "arango_action_menu", mode = { "n", "i" }, desc = "Actions" },
+          ["<c-a>"] = { "arango_create_document", mode = { "n", "i" }, desc = "Create Document" },
+          ["<c-n>"] = { "arango_create_collection", mode = { "n", "i" }, desc = "Create Collection" },
+          ["<c-r>"] = { "arango_rename_collection", mode = { "n", "i" }, desc = "Rename Collection" },
+          ["<c-t>"] = { "arango_truncate_collection", mode = { "n", "i" }, desc = "Truncate Collection" },
+          ["<c-b>"] = opts.allow_database_back and { "arango_pick_database", mode = { "n", "i" }, desc = "Choose Database" } or nil,
+        },
+      },
+      list = {
+        keys = {
+          ["<c-x>"] = { "arango_action_menu", mode = { "n" }, desc = "Actions" },
+          ["<c-a>"] = { "arango_create_document", mode = { "n" }, desc = "Create Document" },
+          ["<c-n>"] = { "arango_create_collection", mode = { "n" }, desc = "Create Collection" },
+          ["<c-r>"] = { "arango_rename_collection", mode = { "n" }, desc = "Rename Collection" },
+          ["<c-t>"] = { "arango_truncate_collection", mode = { "n" }, desc = "Truncate Collection" },
+          ["<c-b>"] = opts.allow_database_back and { "arango_pick_database", mode = { "n" }, desc = "Choose Database" } or nil,
+        },
+      },
+    },
+  })
+
+  picker.opts.search = meta.search
+  picker.input.filter.search = meta.search
+  picker:find({ refresh = true })
+
+  return picker
 end
 
 browse_collection = function(config, collection, field, initial_search, opts)
@@ -1240,6 +1894,20 @@ browse_collection = function(config, collection, field, initial_search, opts)
   local route_kind = opts.kind or (type(field) == "table" and "related" or "collection")
   local picker_title = opts.title
 
+  local function current_route()
+    return {
+      kind = route_kind,
+      config = config,
+      collection = collection,
+      field = meta.field,
+      search = meta.search,
+      offset = meta.offset,
+      values = opts.values,
+      prompt = opts.prompt,
+      title = picker_title,
+    }
+  end
+
   local function open_picker_document(current, item)
     local selected = picker_current_item(current, item)
     if not selected or not selected.item then
@@ -1251,17 +1919,7 @@ browse_collection = function(config, collection, field, initial_search, opts)
       return
     end
 
-    push_history({
-      kind = route_kind,
-      config = config,
-      collection = collection,
-      field = meta.field,
-      search = meta.search,
-      offset = meta.offset,
-      values = opts.values,
-      prompt = opts.prompt,
-      title = picker_title,
-    })
+    push_history(current_route())
     close_picker(current)
     M.open_document(config, vim.tbl_extend("force", payload, { database = config.database }))
   end
@@ -1275,6 +1933,7 @@ browse_collection = function(config, collection, field, initial_search, opts)
       choices[#choices + 1] = { label = "Open related (Ctrl-o)", action = "arango_open_related" }
       choices[#choices + 1] = { label = "Delete document (Ctrl-d)", action = "arango_delete_document" }
     end
+    choices[#choices + 1] = { label = "Create document (Ctrl-a)", action = "arango_create_document" }
 
     if route_kind ~= "related" then
       choices[#choices + 1] = { label = "Change filter field (Ctrl-f)", action = "arango_change_field" }
@@ -1287,10 +1946,6 @@ browse_collection = function(config, collection, field, initial_search, opts)
     end
     if meta.has_more then
       choices[#choices + 1] = { label = "Next page (Ctrl-n)", action = "arango_next_page" }
-    end
-    if route_kind ~= "related" then
-      choices[#choices + 1] = { label = "Rename collection (Ctrl-r)", action = "arango_rename_collection" }
-      choices[#choices + 1] = { label = "Truncate collection (Ctrl-t)", action = "arango_truncate_collection" }
     end
     if #state.history > 0 then
       choices[#choices + 1] = { label = "Go back (Ctrl-b)", action = "arango_go_back" }
@@ -1419,6 +2074,11 @@ browse_collection = function(config, collection, field, initial_search, opts)
       arango_open_document = function(current, item)
         open_picker_document(current, item)
       end,
+      arango_create_document = function(current)
+        push_history(current_route())
+        close_picker(current)
+        open_new_document(config, collection)
+      end,
       arango_next_page = function(current)
         if not meta.has_more then
           vim.notify("Already on last page", vim.log.levels.INFO)
@@ -1484,7 +2144,7 @@ browse_collection = function(config, collection, field, initial_search, opts)
           return
         end
 
-        if not ensure_unmodified_document_buffers({ id = document_id }, "deleting this document") then
+        if not ensure_unmodified_document_buffers({ id = document_id, include_drafts = false }, "deleting this document") then
           return
         end
 
@@ -1493,74 +2153,12 @@ browse_collection = function(config, collection, field, initial_search, opts)
           return
         end
 
-        close_document_buffers({ id = document_id })
+        close_document_buffers({ id = document_id, include_drafts = false })
         if meta.offset > 0 and #meta.items == 1 then
           meta.offset = math.max(0, meta.offset - meta.limit)
         end
         current:find({ refresh = true })
         vim.notify("Document deleted", vim.log.levels.INFO)
-      end,
-      arango_rename_collection = function(current)
-        if not ensure_unmodified_document_buffers({
-          database = config.database,
-          collection = collection,
-        }, "renaming this collection") then
-          return
-        end
-
-        prompt_input({
-          prompt = string.format("Rename collection %s to: ", collection),
-          default = collection,
-        }, function(value)
-          local new_name = vim.trim(value)
-          if new_name == "" or new_name == collection then
-            return
-          end
-
-          local previous = collection
-          local result = try_json(config, "ArangoDB Rename Collection", "rename-collection", {
-            "--collection",
-            previous,
-            "--name",
-            new_name,
-          })
-          if not result then
-            return
-          end
-
-          collection = result.name or new_name
-          meta.collection = collection
-          meta.offset = 0
-          refresh_collection_document_buffers(config, previous, collection)
-          refresh_picker(current)
-          vim.notify(string.format("Collection renamed to %s", collection), vim.log.levels.INFO)
-        end)
-      end,
-      arango_truncate_collection = function(current)
-        if not ensure_unmodified_document_buffers({
-          database = config.database,
-          collection = collection,
-        }, "truncating this collection") then
-          return
-        end
-
-        confirm_collection_name("truncate this collection", collection, function()
-          local result = try_json(config, "ArangoDB Truncate Collection", "truncate-collection", {
-            "--collection",
-            collection,
-          })
-          if not result then
-            return
-          end
-
-          close_document_buffers({
-            database = config.database,
-            collection = collection,
-          })
-          meta.offset = 0
-          refresh_picker(current)
-          vim.notify(string.format("Collection %s truncated", collection), vim.log.levels.INFO)
-        end)
       end,
       arango_action_menu = function(current, item)
         open_action_menu(current, item)
@@ -1573,28 +2171,26 @@ browse_collection = function(config, collection, field, initial_search, opts)
       input = {
         keys = {
           ["<c-x>"] = { "arango_action_menu", mode = { "n", "i" }, desc = "Actions" },
+          ["<c-a>"] = { "arango_create_document", mode = { "n", "i" }, desc = "Create Document" },
           ["<c-p>"] = { "arango_prev_page", mode = { "n", "i" }, desc = "Previous Page" },
           ["<c-n>"] = { "arango_next_page", mode = { "n", "i" }, desc = "Next Page" },
           ["<c-f>"] = route_kind ~= "related" and { "arango_change_field", mode = { "n", "i" }, desc = "Change Filter Field" } or nil,
           ["<c-u>"] = { "arango_reset_search", mode = { "n", "i" }, desc = "Reset Search" },
           ["<c-o>"] = { "arango_open_related", mode = { "n", "i" }, desc = "Open Related" },
           ["<c-d>"] = { "arango_delete_document", mode = { "n", "i" }, desc = "Delete Document" },
-          ["<c-r>"] = route_kind ~= "related" and { "arango_rename_collection", mode = { "n", "i" }, desc = "Rename Collection" } or nil,
-          ["<c-t>"] = route_kind ~= "related" and { "arango_truncate_collection", mode = { "n", "i" }, desc = "Truncate Collection" } or nil,
           ["<c-b>"] = { "arango_go_back", mode = { "n", "i" }, desc = "Go Back" },
         },
       },
       list = {
         keys = {
           ["<c-x>"] = { "arango_action_menu", mode = { "n" }, desc = "Actions" },
+          ["<c-a>"] = { "arango_create_document", mode = { "n" }, desc = "Create Document" },
           ["<c-p>"] = { "arango_prev_page", mode = { "n" }, desc = "Previous Page" },
           ["<c-n>"] = { "arango_next_page", mode = { "n" }, desc = "Next Page" },
           ["<c-f>"] = route_kind ~= "related" and { "arango_change_field", mode = { "n" }, desc = "Change Filter Field" } or nil,
           ["<c-u>"] = { "arango_reset_search", mode = { "n" }, desc = "Reset Search" },
           ["<c-o>"] = { "arango_open_related", mode = { "n" }, desc = "Open Related" },
           ["<c-d>"] = { "arango_delete_document", mode = { "n" }, desc = "Delete Document" },
-          ["<c-r>"] = route_kind ~= "related" and { "arango_rename_collection", mode = { "n" }, desc = "Rename Collection" } or nil,
-          ["<c-t>"] = route_kind ~= "related" and { "arango_truncate_collection", mode = { "n" }, desc = "Truncate Collection" } or nil,
           ["<c-b>"] = { "arango_go_back", mode = { "n" }, desc = "Go Back" },
         },
       },
@@ -1610,7 +2206,7 @@ end
 
 function M.open(opts)
   opts = opts or {}
-  if opts.kind == "document" or opts.kind == "collection" or opts.kind == "related" then
+  if opts.kind == "document" or opts.kind == "collection" or opts.kind == "collections" or opts.kind == "related" then
     open_route(opts)
     return
   end
@@ -1634,17 +2230,19 @@ function M.open(opts)
     return
   end
 
-  local function with_collection()
-    choose_collection(config, function(collection)
-      if opts.reset_history ~= false then
-        clear_history()
-      end
-      browse_collection(config, collection, opts.field or "_key", opts.search)
-    end)
+  local function with_collection_picker(allow_database_back)
+    if opts.reset_history ~= false then
+      clear_history()
+    end
+    browse_collections(config, {
+      document_field = opts.field or "_key",
+      document_search = opts.search or "",
+      allow_database_back = allow_database_back == true,
+    })
   end
 
   if opts.pick_database == false then
-    with_collection()
+    with_collection_picker(false)
     return
   end
 
@@ -1655,7 +2253,7 @@ function M.open(opts)
       return
     end
     config = chosen
-    with_collection()
+    with_collection_picker(true)
   end)
 end
 
