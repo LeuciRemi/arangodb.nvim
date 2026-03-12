@@ -218,21 +218,6 @@ local function restore_picker_input_focus(picker)
   end)
 end
 
-local function set_picker_search(picker, search)
-  if not picker or picker.closed or not picker.input then
-    return
-  end
-
-  if picker.input.set then
-    picker.input:set(nil, search or "")
-    return
-  end
-
-  if picker.input.filter then
-    picker.input.filter.search = search or ""
-  end
-end
-
 local function field_label(field)
   if type(field) == "table" then
     return table.concat(field, ", ")
@@ -704,7 +689,7 @@ local function related_values(document, collections)
       return
     end
 
-    local key = display
+    local key = (relation_collection or "") .. "\0" .. display
     local entry = entries[key]
     if entry then
       if source and source ~= "" and not entry.source_lookup[source] then
@@ -963,7 +948,7 @@ local function direct_relation_key(relation)
   if relation.id and type(relation.id) == "string" then
     return relation.id:match("^[^/]+/(.+)$")
   end
-  if relation.collection and relation.value then
+  if relation.collection and relation.value and type(relation.field) ~= "table" then
     return relation.value
   end
 end
@@ -1273,6 +1258,9 @@ browse_collection = function(config, collection, field, initial_search, opts)
       field = meta.field,
       search = meta.search,
       offset = meta.offset,
+      values = opts.values,
+      prompt = opts.prompt,
+      title = picker_title,
     })
     close_picker(current)
     M.open_document(config, vim.tbl_extend("force", payload, { database = config.database }))
