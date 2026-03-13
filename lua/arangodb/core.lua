@@ -1,11 +1,9 @@
+--- Shared helpers for connection discovery, URL handling, and notifications.
 local M = {}
 
 local URL_SCHEMES = {
-  arangodb = "http",
   http = "http",
   https = "https",
-  ["arangodb+http"] = "http",
-  ["arangodb+https"] = "https",
 }
 
 local ENV_SCHEME_ALIASES = {
@@ -42,6 +40,7 @@ local function plugin_config()
   return require("arangodb.config").get()
 end
 
+--- Read an environment variable and fall back to the provided default.
 function M.env(name, default)
   local value = vim.env[name]
   if value == nil or value == "" then
@@ -50,10 +49,12 @@ function M.env(name, default)
   return value
 end
 
+--- Return the environment variable name used for a specific database URL.
 function M.database_env_key(database)
   return "NVIM_ARANGO_" .. database:upper():gsub("[^%w]", "_") .. "_URL"
 end
 
+--- Percent-encode a value for use inside connection URLs.
 function M.url_encode(value)
   return (
     tostring(value):gsub("[^%w%-_%.~]", function(char)
@@ -62,6 +63,7 @@ function M.url_encode(value)
   )
 end
 
+--- Decode a percent-encoded value taken from a connection URL.
 function M.url_decode(value)
   return (tostring(value):gsub("%%(%x%x)", function(hex)
     return string.char(tonumber(hex, 16))
@@ -84,22 +86,26 @@ local function normalize_scheme(value, allow_env_aliases)
   end
 end
 
+--- Resolve the default transport scheme used for generated connection URLs.
 function M.default_transport_scheme()
   return normalize_scheme(M.env("NVIM_ARANGO_SCHEME", "http"), true) or "http"
 end
 
+--- Report whether HTTPS support is available through curl.
 function M.https_transport_available()
   return vim.fn.executable("curl") == 1
 end
 
 
+--- Summarize the available HTTP transports for health reporting.
 function M.transport_display()
   if M.https_transport_available() then
-    return "built-in Lua HTTP for http:// and arangodb://, curl for https://"
+    return "built-in Lua HTTP for http://, curl for https://"
   end
-  return "built-in Lua HTTP for http:// and arangodb:// (install curl for https://)"
+  return "built-in Lua HTTP for http:// (install curl for https://)"
 end
 
+--- Build a connection URL for the requested database from environment defaults.
 function M.arango_url(database)
   local specific_env = database == "_system" and "NVIM_ARANGO_SYSTEM_URL" or M.database_env_key(database)
   local explicit = M.env(specific_env, nil)
@@ -108,11 +114,10 @@ function M.arango_url(database)
   end
 
   local scheme = M.default_transport_scheme()
-  local url_scheme = scheme == "https" and "https" or "arangodb"
 
   return string.format(
     "%s://%s:%s@%s:%s/%s",
-    url_scheme,
+    scheme,
     M.url_encode(M.env("NVIM_ARANGO_USER", "root")),
     M.url_encode(M.env("NVIM_ARANGO_PASSWORD", "root")),
     M.env("NVIM_ARANGO_HOST", "127.0.0.1"),
@@ -121,6 +126,7 @@ function M.arango_url(database)
   )
 end
 
+--- Parse a connection URL into the fields used by the HTTP client.
 function M.parse_connection(url)
   if type(url) ~= "string" or url == "" then
     return nil
@@ -162,6 +168,7 @@ function M.parse_connection(url)
   }
 end
 
+--- Display a normalized user-facing error message.
 function M.notify_error(err, title)
   if type(err) == "string" then
     err = vim.trim(err)
@@ -190,6 +197,7 @@ local function add_connection(items, seen, name, url)
   }
 end
 
+--- Merge configured connection tables into a de-duplicated list.
 local function collect_connections(source, items, seen)
   if type(source) ~= "table" then
     return
@@ -216,14 +224,11 @@ local function configured_connections()
 
   collect_connections(options.connections, items, seen)
   collect_connections(vim.g.arangodb_connections, items, seen)
-  if options.legacy_globals then
-    collect_connections(vim.g.arango_connections, items, seen)
-    collect_connections(vim.g.dbs, items, seen)
-  end
 
   return items, seen
 end
 
+--- Discover databases from the default server connection, falling back to _system.
 function M.discover_databases()
   local fallback = { "_system" }
 
@@ -253,6 +258,7 @@ function M.discover_databases()
   return output
 end
 
+--- Return the full list of configured and discovered database connections.
 function M.available_databases()
   local items, seen = configured_connections()
 
@@ -267,6 +273,7 @@ function M.available_databases()
   return items
 end
 
+--- Find a named database from the available connection list.
 function M.find_database(name)
   for _, item in ipairs(M.available_databases()) do
     if item.name == name then
@@ -275,6 +282,7 @@ function M.find_database(name)
   end
 end
 
+--- Resolve the database that should be opened first by the browser.
 function M.default_database()
   local preferred = plugin_config().default_database
   if type(preferred) == "table" and preferred.name and preferred.url then

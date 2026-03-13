@@ -31,7 +31,7 @@ REQUIREMENTS                                      *arangodb.nvim-requirements*
 - folke/snacks.nvim
 - curl for `https://` connections
 
-The plugin uses a built-in Lua HTTP client for `arangodb://` and `http://`.
+The plugin uses a built-in Lua HTTP client for `http://`.
 `https://` connections are supported through `curl`.
 
 ===============================================================================
@@ -48,7 +48,7 @@ Example with lazy.nvim:
     config = function()
       require("arangodb").setup({
         connections = {
-          _system = "arangodb://root:root@127.0.0.1:8529/_system",
+          _system = "http://root:root@127.0.0.1:8529/_system",
         },
         default_database = "_system",
         keymaps = {
@@ -71,7 +71,6 @@ Supported options:
 - `http_timeout`
 - `tls_verify`
 - `tls_ca_file`
-- `legacy_globals`
 
 Environment variables:
 
@@ -113,18 +112,19 @@ COMMANDS                                              *arangodb.nvim-commands*
 
                                                 *:ArangoDocumentSave*
 :ArangoDocumentSave
-    Save the current ArangoDB document buffer. Draft buffers are inserted into
-    ArangoDB on their first save.
+    Buffer-local command that saves the current ArangoDB document buffer. Draft
+    buffers are inserted into ArangoDB on their first save.
 
                                               *:ArangoDocumentDelete*
 :ArangoDocumentDelete
-    Delete the current ArangoDB document buffer. For draft buffers, this
-    discards the draft without sending a delete request.
+    Buffer-local command that deletes the current ArangoDB document buffer. For
+    draft buffers, this discards the draft without sending a delete request.
 
                                              *:ArangoDocumentRelated*
 :ArangoDocumentRelated
-    Pick and open a related document from direct foreign keys, nested
-    relation objects, or reverse links discovered in other collections.
+    Buffer-local command that picks and opens a related document from direct
+    foreign keys, nested relation objects, or reverse links discovered in
+    other collections.
 
 ===============================================================================
 HEALTH                                                    *arangodb.nvim-health*

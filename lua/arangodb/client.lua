@@ -1,3 +1,4 @@
+--- ArangoDB HTTP client helpers used by the picker and document buffers.
 local M = {}
 
 local core = require("arangodb.core")
@@ -43,6 +44,7 @@ local function trim_message(value)
   return vim.trim(value)
 end
 
+--- Decode a JSON response and turn ArangoDB API failures into Lua errors.
 local function decode_json_response(response)
   local body = response.body or ""
   local decoded = nil
@@ -79,6 +81,7 @@ local function decode_json_response(response)
   return decoded
 end
 
+--- Send an authenticated request through the transport configured for the database.
 local function request(config, method, path, payload)
   local options = require("arangodb.config").get()
   local body = payload ~= nil and vim.json.encode(payload) or nil
@@ -260,6 +263,7 @@ local function get_collection_count(config, collection)
   return data.count or 0
 end
 
+--- Execute an AQL query and transparently read every cursor page.
 local function run_aql(config, query, bind_vars, batch_size)
   local payload = {
     query = query,
@@ -292,6 +296,7 @@ local function run_aql(config, query, bind_vars, batch_size)
   }
 end
 
+--- Collect dotted field paths from sampled documents for the filter picker.
 local function collect_field_paths(value, prefix, result, depth, max_depth)
   prefix = prefix or ""
   result = result or {}
@@ -329,6 +334,7 @@ local function extract_value(document, field_path)
   return value
 end
 
+--- Convert a dotted field path into a safe AQL expression.
 local function field_expression(field_path)
   if not field_path or field_path == "*" then
     return "doc"
@@ -444,6 +450,7 @@ local function related_field_value_text(document, fields)
   return table.concat(items, " | ")
 end
 
+--- List the databases visible to the authenticated user.
 function M.list_databases(config)
   local data = server_request(config, "GET", "/_db/_system/_api/database/user")
   local databases = data.result or {}
@@ -451,6 +458,7 @@ function M.list_databases(config)
   return databases
 end
 
+--- Return collection metadata enriched with labels used by the picker preview.
 function M.list_collection_details(config)
   local data = database_request(config, "GET", "/_api/collection")
   local collections = {}
@@ -476,6 +484,7 @@ function M.list_collection_details(config)
   return collections
 end
 
+--- Return collection names sorted for the browser picker.
 function M.list_collections(config)
   local collections = M.list_collection_details(config)
   local result = {}
@@ -487,6 +496,7 @@ function M.list_collections(config)
   return result
 end
 
+--- Gather high-level database metrics for the collections overview preview.
 function M.database_overview(config)
   local overview = {
     name = config.database,
@@ -547,6 +557,7 @@ function M.database_overview(config)
   return overview
 end
 
+--- Sample collection documents to extract candidate field paths for filtering.
 function M.list_fields(config, collection, sample_size)
   local query = "FOR doc IN @@collection LIMIT @sample RETURN doc"
   local data = run_aql(config, query, {
@@ -572,12 +583,14 @@ function M.list_fields(config, collection, sample_size)
   return result
 end
 
+--- Fetch a single document and format it for the editor buffer.
 function M.get_document(config, document_id)
   local collection, key = split_document_id(document_id)
   local document = get_document_raw(config, collection, key)
   return wrap_document(document, config.database)
 end
 
+--- Replace an existing document and return the refreshed document payload.
 function M.save_document(config, document)
   if type(document) ~= "table" then
     error("Document payload must be a JSON object")
@@ -603,6 +616,7 @@ function M.save_document(config, document)
   }
 end
 
+--- Delete a document by id and return the ArangoDB response metadata.
 function M.delete_document(config, document_id)
   local collection, key = split_document_id(document_id)
   local deleted = database_request(config, "DELETE", document_path(collection, key))
@@ -616,6 +630,7 @@ function M.delete_document(config, document_id)
   }
 end
 
+--- Normalize a draft document before creating it in ArangoDB.
 local function sanitize_new_document(collection, document)
   if type(document) ~= "table" then
     error("Document payload must be a JSON object")
@@ -656,6 +671,7 @@ local function collection_type_code(collection_type)
   error("Collection type must be 'document' or 'edge'")
 end
 
+--- Insert a new document and return the created payload formatted for editing.
 function M.create_document(config, collection, document)
   local target_collection, key, payload = sanitize_new_document(collection, document)
   local created = database_request(config, "POST", "/_api/document/" .. core.url_encode(target_collection), payload)
@@ -672,6 +688,7 @@ function M.create_document(config, collection, document)
   }
 end
 
+--- Create a collection and normalize the type label for the UI.
 function M.create_collection(config, collection, collection_type)
   collection = vim.trim(collection or "")
   if collection == "" then
@@ -692,6 +709,7 @@ function M.create_collection(config, collection, collection_type)
   }
 end
 
+--- Rename a collection and return the updated name.
 function M.rename_collection(config, collection, new_name)
   new_name = vim.trim(new_name or "")
   if new_name == "" then
@@ -713,6 +731,7 @@ function M.rename_collection(config, collection, new_name)
   }
 end
 
+--- Remove every document from a collection without deleting the collection itself.
 function M.truncate_collection(config, collection)
   local truncated = database_request(config, "PUT", collection_path(collection) .. "/truncate?compact=false")
 
@@ -723,6 +742,7 @@ function M.truncate_collection(config, collection)
   }
 end
 
+--- Search documents that refer to one or more related ids or keys.
 function M.search_related(config, field, value, limit, collection)
   local values = related_search_values(value)
   local matches = {}
@@ -761,6 +781,7 @@ function M.search_related(config, field, value, limit, collection)
   }
 end
 
+--- Browse related documents with pagination support for the live picker.
 function M.browse_related_collection(config, collection, field, value, search, offset, limit)
   local values = related_search_values(value)
   local fields = related_field_paths(field)
@@ -826,6 +847,7 @@ function M.browse_related_collection(config, collection, field, value, search, o
   }
 end
 
+--- Browse a collection page and return picker-ready preview items.
 function M.browse_collection(config, collection, field, search, offset, limit)
   field = field or "_key"
   search = search or ""
