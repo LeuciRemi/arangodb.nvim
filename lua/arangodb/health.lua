@@ -1,3 +1,4 @@
+--- Healthcheck entry point reported by :checkhealth arangodb.
 local health = vim.health
 local uv = vim.uv or vim.loop
 
@@ -17,6 +18,7 @@ local function join_names(items)
   return table.concat(names, ", ")
 end
 
+--- Report transport support, dependencies, and detected database candidates.
 function M.check()
   local core = require("arangodb.core")
   local config = require("arangodb.config").get()

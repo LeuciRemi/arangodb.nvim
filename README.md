@@ -89,6 +89,12 @@ require("arangodb").setup({
 - `tls_ca_file`: custom CA bundle path passed to `curl --cacert` for `https://` URLs
 - `legacy_globals`: also read `vim.g.arango_connections` and `vim.g.dbs`
 
+### Legacy options
+
+The current plugin is implemented in Lua and no longer uses the old Python runner.
+If your config still contains `python_command` or `runner`, remove them: both
+options are ignored and only kept to help older configs fail gracefully.
+
 ## Environment variables
 
 You can use environment variables instead of explicit `connections`:
@@ -118,9 +124,9 @@ export NVIM_ARANGO_KORE_URL='https://root:root@db.example.com:8529/kore'
 - `:ArangoBrowse {database}` - open the collections picker for a specific database
 - `:ArangoResume` - reopen the current browser picker
 - `:ArangoBack` - return to the previous ArangoDB picker or document view
-- `:ArangoDocumentSave` - save the current document buffer, or create a draft document on first save
-- `:ArangoDocumentDelete` - delete the current document buffer, or discard a draft document
-- `:ArangoDocumentRelated` - open a related document from direct keys, nested relations, or reverse links in the current buffer
+- `:ArangoDocumentSave` - buffer-local command that saves the current document buffer, or creates a draft document on first save
+- `:ArangoDocumentDelete` - buffer-local command that deletes the current document buffer, or discards a draft document
+- `:ArangoDocumentRelated` - buffer-local command that opens a related document from direct keys, nested relations, or reverse links in the current buffer
 
 ## Picker actions
 

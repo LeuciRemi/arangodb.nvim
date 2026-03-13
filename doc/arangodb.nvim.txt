@@ -73,6 +73,11 @@ Supported options:
 - `tls_ca_file`
 - `legacy_globals`
 
+Legacy options:
+
+- `python_command` and `runner` are ignored by the current Lua implementation.
+  Remove them from `require("arangodb").setup()` when updating an older config.
+
 Environment variables:
 
 - `NVIM_ARANGO_HOST`
@@ -113,18 +118,19 @@ COMMANDS                                              *arangodb.nvim-commands*
 
                                                 *:ArangoDocumentSave*
 :ArangoDocumentSave
-    Save the current ArangoDB document buffer. Draft buffers are inserted into
-    ArangoDB on their first save.
+    Buffer-local command that saves the current ArangoDB document buffer. Draft
+    buffers are inserted into ArangoDB on their first save.
 
                                               *:ArangoDocumentDelete*
 :ArangoDocumentDelete
-    Delete the current ArangoDB document buffer. For draft buffers, this
-    discards the draft without sending a delete request.
+    Buffer-local command that deletes the current ArangoDB document buffer. For
+    draft buffers, this discards the draft without sending a delete request.
 
                                              *:ArangoDocumentRelated*
 :ArangoDocumentRelated
-    Pick and open a related document from direct foreign keys, nested
-    relation objects, or reverse links discovered in other collections.
+    Buffer-local command that picks and opens a related document from direct
+    foreign keys, nested relation objects, or reverse links discovered in
+    other collections.
 
 ===============================================================================
 HEALTH                                                    *arangodb.nvim-health*
