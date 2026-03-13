@@ -58,12 +58,6 @@ function M.check()
     info("install `curl` to enable https:// connections")
   end
 
-  if config.python_command ~= nil or config.runner ~= nil then
-    warn("Legacy Python options are ignored", {
-      "Remove `python_command` and `runner` from `require('arangodb').setup()`.",
-    })
-  end
-
   if pcall(require, "snacks") then
     ok("`folke/snacks.nvim` is available")
   else
@@ -79,10 +73,6 @@ function M.check()
       "Configure `connections` in `require('arangodb').setup()`.",
       "Or set `NVIM_ARANGO_*` environment variables.",
     })
-  end
-
-  if config.legacy_globals then
-    info("legacy globals enabled: `vim.g.arango_connections`, `vim.g.dbs`")
   end
 end
 

@@ -31,7 +31,7 @@ REQUIREMENTS                                      *arangodb.nvim-requirements*
 - folke/snacks.nvim
 - curl for `https://` connections
 
-The plugin uses a built-in Lua HTTP client for `arangodb://` and `http://`.
+The plugin uses a built-in Lua HTTP client for `http://`.
 `https://` connections are supported through `curl`.
 
 ===============================================================================
@@ -48,7 +48,7 @@ Example with lazy.nvim:
     config = function()
       require("arangodb").setup({
         connections = {
-          _system = "arangodb://root:root@127.0.0.1:8529/_system",
+          _system = "http://root:root@127.0.0.1:8529/_system",
         },
         default_database = "_system",
         keymaps = {
@@ -71,12 +71,6 @@ Supported options:
 - `http_timeout`
 - `tls_verify`
 - `tls_ca_file`
-- `legacy_globals`
-
-Legacy options:
-
-- `python_command` and `runner` are ignored by the current Lua implementation.
-  Remove them from `require("arangodb").setup()` when updating an older config.
 
 Environment variables:
 

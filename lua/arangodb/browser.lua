@@ -737,7 +737,7 @@ local function open_related_selector(config, relations, on_choice)
 end
 
 local function document_buffer_name(doc)
-  return string.format("arangodb://%s/%s", doc.database, doc.id)
+  return string.format("arangodb-buffer://%s/%s", doc.database, doc.id)
 end
 
 local function set_buffer_json(buf, text)

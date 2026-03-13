@@ -19,7 +19,6 @@ M.defaults = {
   http_timeout = 30000,
   tls_verify = true,
   tls_ca_file = nil,
-  legacy_globals = true,
 }
 
 local options = vim.deepcopy(M.defaults)

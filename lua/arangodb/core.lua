@@ -2,11 +2,8 @@
 local M = {}
 
 local URL_SCHEMES = {
-  arangodb = "http",
   http = "http",
   https = "https",
-  ["arangodb+http"] = "http",
-  ["arangodb+https"] = "https",
 }
 
 local ENV_SCHEME_ALIASES = {
@@ -103,9 +100,9 @@ end
 --- Summarize the available HTTP transports for health reporting.
 function M.transport_display()
   if M.https_transport_available() then
-    return "built-in Lua HTTP for http:// and arangodb://, curl for https://"
+    return "built-in Lua HTTP for http://, curl for https://"
   end
-  return "built-in Lua HTTP for http:// and arangodb:// (install curl for https://)"
+  return "built-in Lua HTTP for http:// (install curl for https://)"
 end
 
 --- Build a connection URL for the requested database from environment defaults.
@@ -117,11 +114,10 @@ function M.arango_url(database)
   end
 
   local scheme = M.default_transport_scheme()
-  local url_scheme = scheme == "https" and "https" or "arangodb"
 
   return string.format(
     "%s://%s:%s@%s:%s/%s",
-    url_scheme,
+    scheme,
     M.url_encode(M.env("NVIM_ARANGO_USER", "root")),
     M.url_encode(M.env("NVIM_ARANGO_PASSWORD", "root")),
     M.env("NVIM_ARANGO_HOST", "127.0.0.1"),
@@ -228,10 +224,6 @@ local function configured_connections()
 
   collect_connections(options.connections, items, seen)
   collect_connections(vim.g.arangodb_connections, items, seen)
-  if options.legacy_globals then
-    collect_connections(vim.g.arango_connections, items, seen)
-    collect_connections(vim.g.dbs, items, seen)
-  end
 
   return items, seen
 end
