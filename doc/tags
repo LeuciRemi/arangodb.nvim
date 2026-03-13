@@ -1,3 +1,4 @@
+:ArangoBack	arangodb.nvim.txt	/*:ArangoBack*
 :ArangoBrowse	arangodb.nvim.txt	/*:ArangoBrowse*
 :ArangoDocumentDelete	arangodb.nvim.txt	/*:ArangoDocumentDelete*
 :ArangoDocumentRelated	arangodb.nvim.txt	/*:ArangoDocumentRelated*

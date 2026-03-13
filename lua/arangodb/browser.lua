@@ -1,3 +1,4 @@
+--- Picker and document-buffer UI for browsing ArangoDB from Neovim.
 local M = {}
 
 local arango = require("arangodb.core")
@@ -28,6 +29,7 @@ local function is_list(value)
   return true
 end
 
+-- Keep track of the active picker and of the back stack shared by picker views.
 local state = {
   picker = nil,
   history = {},
@@ -82,6 +84,7 @@ local function generate_uuid()
   )
 end
 
+--- Parse command-style extra arguments into a keyed options table.
 local function parse_extra(extra)
   local options = {}
   local index = 1
@@ -107,6 +110,7 @@ local function parse_extra(extra)
   return options
 end
 
+--- Dispatch JSON-returning operations used by the browser UI.
 local function run_json(config, subcommand, extra)
   local options = parse_extra(extra)
 
@@ -159,6 +163,7 @@ local function run_json(config, subcommand, extra)
   error("Unsupported ArangoDB command: " .. tostring(subcommand))
 end
 
+--- Dispatch list-returning operations used by the browser UI.
 local function run_lines(config, subcommand, extra)
   local options = parse_extra(extra)
 
@@ -175,6 +180,7 @@ local function run_lines(config, subcommand, extra)
   error("Unsupported ArangoDB command: " .. tostring(subcommand))
 end
 
+--- Execute an operation and convert failures into user notifications.
 local function try_call(title, fn, ...)
   local ok, result = pcall(fn, ...)
   if ok then
@@ -206,6 +212,7 @@ local function refresh_picker(picker, opts)
   picker:find(opts or { refresh = true })
 end
 
+--- Save the current picker route so :ArangoBack can restore it later.
 local function push_history(route)
   if type(route) ~= "table" then
     return
@@ -213,6 +220,7 @@ local function push_history(route)
   state.history[#state.history + 1] = vim.deepcopy(route)
 end
 
+--- Restore the previous picker route from the navigation stack.
 local function pop_history()
   if #state.history == 0 then
     return nil
@@ -729,7 +737,7 @@ local function open_related_selector(config, relations, on_choice)
 end
 
 local function document_buffer_name(doc)
-  return string.format("arangodb://%s/%s", doc.database, doc.id)
+  return string.format("arangodb-buffer://%s/%s", doc.database, doc.id)
 end
 
 local function set_buffer_json(buf, text)
@@ -954,6 +962,7 @@ local function related_search_values(relation)
   return values
 end
 
+--- Scan a document recursively and infer outgoing relations from ids and keys.
 local function related_values(document, collections)
   local values = {}
   local entries = {}
@@ -1176,6 +1185,7 @@ local function related_values(document, collections)
   return values
 end
 
+--- Look for reverse relations by sampling candidate fields in other collections.
 local function reverse_related_values(config, document, collections)
   local values = {}
 
@@ -1341,6 +1351,7 @@ local function related_browse_payload(opts)
   return try_call("ArangoDB", client.browse_related_collection, opts.config, opts.collection, opts.field, opts.values, opts.search, opts.offset, opts.limit)
 end
 
+--- Reopen the previous ArangoDB route from the shared history stack.
 go_back = function(current)
   local route = pop_history()
   if not route then
@@ -1355,6 +1366,7 @@ go_back = function(current)
   open_route(route)
 end
 
+--- Global entry point for :ArangoBack.
 function M.back()
   go_back(nil)
 end
@@ -1377,6 +1389,7 @@ local function jump_to_related(config, relation, current, context)
   open_route(route)
 end
 
+--- Attach buffer-local commands, keymaps, and :write integration to a document.
 local function document_actions(config, buf)
   if vim.b[buf].arangodb_actions_initialized then
     return
@@ -1502,6 +1515,7 @@ local function document_actions(config, buf)
   vim.b[buf].arangodb_actions_initialized = true
 end
 
+--- Open an ArangoDB document inside a regular JSON buffer.
 function M.open_document(config, doc)
   doc = doc or {}
   local document_id = doc.id or doc._id
@@ -1596,6 +1610,7 @@ local function update_collection_picker_title(picker, config, search, allow_data
   picker:update_titles()
 end
 
+--- Open the collections picker for the selected database.
 browse_collections = function(config, opts)
   local snacks = get_snacks()
   if not snacks then
@@ -1876,6 +1891,7 @@ browse_collections = function(config, opts)
   return picker
 end
 
+--- Open the document picker for a collection or related-document route.
 browse_collection = function(config, collection, field, initial_search, opts)
   local snacks = get_snacks()
   if not snacks then
@@ -2209,6 +2225,7 @@ browse_collection = function(config, collection, field, initial_search, opts)
   return picker
 end
 
+--- Open the browser entry point or restore a serialized route.
 function M.open(opts)
   opts = opts or {}
   if opts.kind == "document" or opts.kind == "collection" or opts.kind == "collections" or opts.kind == "related" then
@@ -2262,6 +2279,7 @@ function M.open(opts)
   end)
 end
 
+--- Re-show the active picker, or open the browser again if it was closed.
 function M.resume()
   if state.picker and not state.picker.closed then
     state.picker:show()

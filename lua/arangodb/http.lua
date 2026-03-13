@@ -1,3 +1,4 @@
+--- Minimal HTTP transport used by the ArangoDB client.
 local M = {}
 
 local uv = vim.uv or vim.loop
@@ -10,6 +11,7 @@ local function close_handle(handle)
   end
 end
 
+--- Encode basic-auth credentials without depending on an external library.
 local function encode_base64(data)
   local parts = {}
 
@@ -43,6 +45,7 @@ local function encode_base64(data)
   return table.concat(parts)
 end
 
+--- Read a single HTTP header or chunk line from a response buffer.
 local function read_line(text, offset)
   local crlf = text:find("\r\n", offset, true)
   local lf = text:find("\n", offset, true)
@@ -55,6 +58,7 @@ local function read_line(text, offset)
   end
 end
 
+--- Decode chunked transfer-encoding returned by ArangoDB or curl.
 local function decode_chunked(body)
   local chunks = {}
   local offset = 1
@@ -96,6 +100,7 @@ local function decode_chunked(body)
   return table.concat(chunks)
 end
 
+--- Parse the raw HTTP response into status, headers, and body fields.
 local function parse_response(raw)
   local header_end = raw:find("\r\n\r\n", 1, true)
   local separator_len = 4
@@ -152,6 +157,7 @@ local function normalize_scheme(value)
   return scheme
 end
 
+--- Build a predictable header set for the outgoing HTTP request.
 local function build_headers(opts, host, port, body)
   local headers = {}
   for name, value in pairs(opts.headers or {}) do
@@ -195,6 +201,7 @@ local function sorted_header_names(headers)
   return names
 end
 
+--- Render an HTTP/1.1 request for the libuv TCP transport.
 local function build_request(method, path, headers, body)
   local request_parts = {
     string.format("%s %s HTTP/1.1", method, path),
@@ -231,6 +238,7 @@ local function run_command(args, input)
   return output, vim.v.shell_error
 end
 
+--- Shell out to curl for HTTPS requests and parse its full response output.
 local function curl_request(opts, scheme, host, port, method, path, headers, body, timeout)
   if vim.fn.executable("curl") ~= 1 then
     error("HTTPS ArangoDB connections require `curl` to be installed")
@@ -292,6 +300,7 @@ local function curl_request(opts, scheme, host, port, method, path, headers, bod
   return parse_response(output)
 end
 
+--- Execute a request through curl for HTTPS or through libuv TCP for HTTP.
 function M.request(opts)
   opts = opts or {}
 

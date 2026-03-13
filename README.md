@@ -22,7 +22,7 @@ This plugin extracts the ArangoDB browser workflow from my personal config into 
 - `curl` for `https://` connections
 
 The plugin now talks to ArangoDB through a built-in Lua HTTP client.
-Plain `http://` and legacy `arangodb://` URLs use the built-in Lua transport.
+Plain `http://` URLs use the built-in Lua transport.
 `https://` URLs are supported through `curl`.
 
 ## Installation
@@ -39,7 +39,7 @@ Plain `http://` and legacy `arangodb://` URLs use the built-in Lua transport.
     require("arangodb").setup({
       default_database = "_system",
       connections = {
-        _system = "arangodb://root:root@127.0.0.1:8529/_system",
+        _system = "http://root:root@127.0.0.1:8529/_system",
       },
       keymaps = {
         browse = "<leader>ea",
@@ -60,7 +60,7 @@ Plain `http://` and legacy `arangodb://` URLs use the built-in Lua transport.
 ```lua
 require("arangodb").setup({
   connections = {
-    _system = "arangodb://root:root@127.0.0.1:8529/_system",
+    _system = "http://root:root@127.0.0.1:8529/_system",
     kore = "https://root:root@db.example.com:8529/kore",
   },
   default_database = "kore",
@@ -69,13 +69,12 @@ require("arangodb").setup({
   http_timeout = 30000,
   tls_verify = true,
   tls_ca_file = nil,
-  legacy_globals = true,
 })
 ```
 
 ### Options
 
-- `connections`: table of named connection URLs, either `{ name = url }` or `{ { name = "db", url = "..." } }`; accepts `arangodb://`, `http://`, and `https://`
+- `connections`: table of named connection URLs, either `{ name = url }` or `{ { name = "db", url = "..." } }`; accepts `http://` and `https://`
 - `default_database`: preferred database name or `{ name, url }`
 - `keymaps.browse`: global normal-mode keymap for `require("arangodb").browse()`
 - `keymaps.resume`: global normal-mode keymap for `require("arangodb").resume()`
@@ -87,7 +86,6 @@ require("arangodb").setup({
 - `http_timeout`: timeout in milliseconds for ArangoDB HTTP requests
 - `tls_verify`: verify HTTPS certificates when using `https://` URLs (default: `true`)
 - `tls_ca_file`: custom CA bundle path passed to `curl --cacert` for `https://` URLs
-- `legacy_globals`: also read `vim.g.arango_connections` and `vim.g.dbs`
 
 ## Environment variables
 
@@ -118,9 +116,9 @@ export NVIM_ARANGO_KORE_URL='https://root:root@db.example.com:8529/kore'
 - `:ArangoBrowse {database}` - open the collections picker for a specific database
 - `:ArangoResume` - reopen the current browser picker
 - `:ArangoBack` - return to the previous ArangoDB picker or document view
-- `:ArangoDocumentSave` - save the current document buffer, or create a draft document on first save
-- `:ArangoDocumentDelete` - delete the current document buffer, or discard a draft document
-- `:ArangoDocumentRelated` - open a related document from direct keys, nested relations, or reverse links in the current buffer
+- `:ArangoDocumentSave` - buffer-local command that saves the current document buffer, or creates a draft document on first save
+- `:ArangoDocumentDelete` - buffer-local command that deletes the current document buffer, or discards a draft document
+- `:ArangoDocumentRelated` - buffer-local command that opens a related document from direct keys, nested relations, or reverse links in the current buffer
 
 ## Picker actions
 
@@ -148,7 +146,7 @@ It checks the HTTP transport setup, optional HTTPS support through `curl`, `snac
 ## Notes
 
 - This plugin currently relies on `folke/snacks.nvim` for the live picker UI.
-- Keep using `arangodb://` for legacy plain HTTP configs, or switch to `https://` for TLS-enabled instances.
+- Use `http://` for plain connections or `https://` for TLS-enabled instances.
 - Install `curl` to use `https://` connections.
 - Connection strings may contain credentials, so prefer environment variables if you do not want them stored in your config.
 - Add a license before making the repository fully public for reuse.

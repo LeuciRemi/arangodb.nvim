@@ -1,3 +1,4 @@
+--- Healthcheck entry point reported by :checkhealth arangodb.
 local health = vim.health
 local uv = vim.uv or vim.loop
 
@@ -17,6 +18,7 @@ local function join_names(items)
   return table.concat(names, ", ")
 end
 
+--- Report transport support, dependencies, and detected database candidates.
 function M.check()
   local core = require("arangodb.core")
   local config = require("arangodb.config").get()
@@ -56,12 +58,6 @@ function M.check()
     info("install `curl` to enable https:// connections")
   end
 
-  if config.python_command ~= nil or config.runner ~= nil then
-    warn("Legacy Python options are ignored", {
-      "Remove `python_command` and `runner` from `require('arangodb').setup()`.",
-    })
-  end
-
   if pcall(require, "snacks") then
     ok("`folke/snacks.nvim` is available")
   else
@@ -77,10 +73,6 @@ function M.check()
       "Configure `connections` in `require('arangodb').setup()`.",
       "Or set `NVIM_ARANGO_*` environment variables.",
     })
-  end
-
-  if config.legacy_globals then
-    info("legacy globals enabled: `vim.g.arango_connections`, `vim.g.dbs`")
   end
 end
 

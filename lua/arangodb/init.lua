@@ -1,3 +1,4 @@
+--- Public entry points exposed by the plugin.
 local config = require("arangodb.config")
 
 local M = {}
@@ -29,20 +30,24 @@ local function apply_keymaps()
   keymaps_applied = true
 end
 
+--- Merge user options into the plugin configuration and install global keymaps.
 function M.setup(opts)
   config.setup(opts)
   apply_keymaps()
   return config.get()
 end
 
+--- Open the ArangoDB browser UI.
 function M.browse(opts)
   return require("arangodb.browser").open(opts)
 end
 
+--- Reopen the last ArangoDB picker when it is still available.
 function M.resume()
   return require("arangodb.browser").resume()
 end
 
+--- Return to the previous ArangoDB picker or document view.
 function M.back()
   return require("arangodb.browser").back()
 end

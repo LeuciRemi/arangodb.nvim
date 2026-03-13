@@ -1,7 +1,9 @@
+--- Register global user commands for the plugin entry points.
 local M = {}
 
 local created = false
 
+--- Offer completion based on the configured and discovered database names.
 local function complete_databases(arg_lead)
   local items = require("arangodb.core").available_databases()
   local matches = {}
@@ -15,6 +17,7 @@ local function complete_databases(arg_lead)
   return matches
 end
 
+--- Create global commands once per Neovim session.
 function M.setup()
   if created then
     return
