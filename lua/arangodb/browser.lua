@@ -555,22 +555,20 @@ local function confirm_delete_document(document_id)
   ) == 1
 end
 
-local function confirm_collection_name(action, collection, callback, picker)
-  vim.ui.input({
-    prompt = string.format("Type %s to %s: ", collection, action),
-  }, function(value)
-    if value == nil then
-      restore_picker_input_focus(picker)
-      return
-    end
-    if vim.trim(value) ~= collection then
-      vim.notify("Confirmation does not match collection name", vim.log.levels.WARN, { title = "ArangoDB" })
-      restore_picker_input_focus(picker)
-      return
-    end
-    callback()
+local function confirm_truncate_collection(collection, callback, picker)
+  if vim.fn.confirm(
+    string.format("Truncate collection %s?", collection),
+    "&No\n&Yes",
+    1
+  ) ~= 2 then
     restore_picker_input_focus(picker)
-  end)
+    return
+  end
+
+  if callback then
+    callback()
+  end
+  restore_picker_input_focus(picker)
 end
 
 local function choose_database(callback)
@@ -672,7 +670,7 @@ local function truncate_collection_with_prompt(config, collection, callback, pic
     return
   end
 
-  confirm_collection_name("truncate this collection", collection, function()
+  confirm_truncate_collection(collection, function()
     local result = try_json(config, "ArangoDB Truncate Collection", "truncate-collection", {
       "--collection",
       collection,
@@ -1955,6 +1953,7 @@ browse_collection = function(config, collection, field, initial_search, opts)
       choices[#choices + 1] = { label = "Delete document (Ctrl-d)", action = "arango_delete_document" }
     end
     choices[#choices + 1] = { label = "Create document (Ctrl-a)", action = "arango_create_document" }
+    choices[#choices + 1] = { label = "Truncate collection (Ctrl-t)", action = "arango_truncate_collection" }
 
     if route_kind ~= "related" then
       choices[#choices + 1] = { label = "Change filter field (Ctrl-f)", action = "arango_change_field" }
@@ -2100,6 +2099,13 @@ browse_collection = function(config, collection, field, initial_search, opts)
         close_picker(current)
         open_new_document(config, collection)
       end,
+      arango_truncate_collection = function(current)
+        truncate_collection_with_prompt(config, collection, function()
+          meta.offset = 0
+          refresh_picker(current)
+          vim.notify(string.format("Collection %s truncated", collection), vim.log.levels.INFO)
+        end, current)
+      end,
       arango_next_page = function(current)
         if not meta.has_more then
           vim.notify("Already on last page", vim.log.levels.INFO)
@@ -2199,6 +2205,7 @@ browse_collection = function(config, collection, field, initial_search, opts)
           ["<c-u>"] = { "arango_reset_search", mode = { "n", "i" }, desc = "Reset Search" },
           ["<c-o>"] = { "arango_open_related", mode = { "n", "i" }, desc = "Open Related" },
           ["<c-d>"] = { "arango_delete_document", mode = { "n", "i" }, desc = "Delete Document" },
+          ["<c-t>"] = { "arango_truncate_collection", mode = { "n", "i" }, desc = "Truncate Collection" },
           ["<c-b>"] = { "arango_go_back", mode = { "n", "i" }, desc = "Go Back" },
         },
       },
@@ -2212,6 +2219,7 @@ browse_collection = function(config, collection, field, initial_search, opts)
           ["<c-u>"] = { "arango_reset_search", mode = { "n" }, desc = "Reset Search" },
           ["<c-o>"] = { "arango_open_related", mode = { "n" }, desc = "Open Related" },
           ["<c-d>"] = { "arango_delete_document", mode = { "n" }, desc = "Delete Document" },
+          ["<c-t>"] = { "arango_truncate_collection", mode = { "n" }, desc = "Truncate Collection" },
           ["<c-b>"] = { "arango_go_back", mode = { "n" }, desc = "Go Back" },
         },
       },

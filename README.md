@@ -123,7 +123,7 @@ export NVIM_ARANGO_KORE_URL='https://root:root@db.example.com:8529/kore'
 ## Picker actions
 
 - Collections picker: `Enter` open collection, `Ctrl-a` create a draft document, `Ctrl-n` create a collection, `Ctrl-r` rename a collection, `Ctrl-t` truncate a collection, `Ctrl-x` open the actions menu, `Ctrl-b` go back to the database picker when available
-- Documents picker: `Ctrl-a` create a draft document in the current collection, `Ctrl-x` open the document actions menu
+- Documents picker: `Ctrl-a` create a draft document in the current collection, `Ctrl-t` truncate the current collection after confirmation, `Ctrl-x` open the actions menu for the current document listing
 
 ## Lua API
 
