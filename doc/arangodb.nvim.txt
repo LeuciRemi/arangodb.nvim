@@ -99,8 +99,9 @@ COMMANDS                                              *arangodb.nvim-commands*
     - <C-x> opens the collection actions menu
     - <C-b> returns to the database picker when the current view came from it
 
-    In document listings, <C-x> only opens document actions. Collection
-    management stays in the collections picker.
+    In document listings:
+    - <C-t> truncates the current collection after confirmation
+    - <C-x> opens the actions menu for the current document listing
 
                                                         *:ArangoResume*
 :ArangoResume
