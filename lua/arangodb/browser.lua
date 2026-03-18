@@ -40,6 +40,7 @@ local browse_collection
 local browse_collections
 local go_back
 local open_new_document
+local refresh_collection_document_buffers
 
 local function plugin_options()
   return require("arangodb.config").get()
@@ -759,7 +760,7 @@ local function get_current_document_payload(buf)
   return decoded
 end
 
-local function refresh_collection_document_buffers(config, old_collection, new_collection)
+refresh_collection_document_buffers = function(config, old_collection, new_collection)
   for _, buf in ipairs(arangodb_document_buffers({
     database = config.database,
     collection = old_collection,
