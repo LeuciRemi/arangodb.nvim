@@ -742,6 +742,47 @@ function M.truncate_collection(config, collection)
   }
 end
 
+--- Create a new collection and copy every document from the source collection.
+function M.duplicate_collection(config, source, target)
+  source = vim.trim(source or "")
+  target = vim.trim(target or "")
+  if source == "" then
+    error("Missing source collection name")
+  end
+  if target == "" then
+    error("Missing target collection name")
+  end
+  if source == target then
+    error("The target collection name must be different")
+  end
+
+  local source_collection = database_request(config, "GET", collection_path(source))
+  local collection_type = collection_type_label(source_collection.type)
+  if collection_type ~= "document" and collection_type ~= "edge" then
+    error("Unsupported collection type: " .. tostring(source_collection.type))
+  end
+
+  local created = M.create_collection(config, target, collection_type)
+  local target_name = created.name or target
+
+  run_aql(config, table.concat({
+    "FOR doc IN @@source",
+    "INSERT UNSET(doc, \"_id\", \"_rev\") INTO @@target",
+  }, "\n"), {
+    ["@source"] = source,
+    ["@target"] = target_name,
+  })
+
+  return {
+    database = config.database,
+    source = source,
+    name = target_name,
+    type = collection_type,
+    copied_count = get_collection_count(config, target_name),
+    collection = created.collection,
+  }
+end
+
 --- Search documents that refer to one or more related ids or keys.
 function M.search_related(config, field, value, limit, collection)
   local values = related_search_values(value)

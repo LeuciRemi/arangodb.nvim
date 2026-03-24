@@ -12,6 +12,7 @@ M.defaults = {
   document_keymaps = {
     save = nil,
     delete = nil,
+    duplicate = nil,
     related = nil,
   },
   field_sample_size = 200,

@@ -21,7 +21,8 @@ Main features:
 - search documents with a live picker
 - open JSON documents in regular buffers
 - create draft documents and insert them on first save
-- save, delete, rename, and truncate from Neovim
+- duplicate documents into drafts, then save them as new documents
+- create, duplicate, rename, truncate, save, and delete from Neovim
 - jump to related documents from direct foreign keys, relation objects, and reverse links
 
 ===============================================================================
@@ -72,6 +73,8 @@ Supported options:
 - `tls_verify`
 - `tls_ca_file`
 
+`document_keymaps` supports `save`, `delete`, `duplicate`, and `related`.
+
 Environment variables:
 
 - `NVIM_ARANGO_HOST`
@@ -94,12 +97,16 @@ COMMANDS                                              *arangodb.nvim-commands*
     - <Enter> opens the selected collection
     - <C-a> opens a draft document buffer for the selected collection
     - <C-n> creates a collection
+    - <C-d> duplicates the selected collection into `<name>_clone` by default
     - <C-r> renames the selected collection
     - <C-t> truncates the selected collection
     - <C-x> opens the collection actions menu
     - <C-b> returns to the database picker when the current view came from it
 
     In document listings:
+    - <C-a> opens a new draft document in the current collection
+    - <C-y> duplicates the selected document into a draft with a fresh id
+    - <C-d> deletes the selected document
     - <C-t> truncates the current collection after confirmation
     - <C-x> opens the actions menu for the current document listing
 
@@ -115,6 +122,12 @@ COMMANDS                                              *arangodb.nvim-commands*
 :ArangoDocumentSave
     Buffer-local command that saves the current ArangoDB document buffer. Draft
     buffers are inserted into ArangoDB on their first save.
+
+                                            *:ArangoDocumentDuplicate*
+:ArangoDocumentDuplicate
+    Buffer-local command that duplicates the current ArangoDB document buffer
+    into a new draft with a fresh id. Saving the duplicate creates a new
+    document.
 
                                               *:ArangoDocumentDelete*
 :ArangoDocumentDelete
