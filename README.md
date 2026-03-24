@@ -11,8 +11,8 @@ This plugin extracts the ArangoDB browser workflow from my personal config into 
 - Open documents in JSON buffers and save them back to ArangoDB
 - Create draft documents with prefilled `_key`, `_id`, and `_rev`, then insert them on first save
 - Jump to related documents from direct foreign keys, nested relation objects, and reverse links discovered in other collections
-- Create, rename, and truncate collections from the collections picker
-- Delete documents, rename collections, and truncate collections
+- Create, duplicate, rename, and truncate collections from the collections picker
+- Duplicate draftable documents, delete documents, rename collections, and truncate collections
 - Discover databases from environment variables or explicit connection config
 
 ## Requirements
@@ -48,6 +48,7 @@ Plain `http://` URLs use the built-in Lua transport.
       document_keymaps = {
         save = "<leader>w",
         delete = "<leader>d",
+        duplicate = "<leader>y",
         related = "gr",
       },
     })
@@ -80,6 +81,7 @@ require("arangodb").setup({
 - `keymaps.resume`: global normal-mode keymap for `require("arangodb").resume()`
 - `document_keymaps.save`: buffer-local keymap for saving the current document
 - `document_keymaps.delete`: buffer-local keymap for deleting the current document
+- `document_keymaps.duplicate`: buffer-local keymap for duplicating the current document into a new draft
 - `document_keymaps.related`: buffer-local keymap for opening related documents
 - `field_sample_size`: number of documents sampled when listing candidate filter fields
 - `page_size`: number of documents fetched per picker page
@@ -117,13 +119,14 @@ export NVIM_ARANGO_KORE_URL='https://root:root@db.example.com:8529/kore'
 - `:ArangoResume` - reopen the current browser picker
 - `:ArangoBack` - return to the previous ArangoDB picker or document view
 - `:ArangoDocumentSave` - buffer-local command that saves the current document buffer, or creates a draft document on first save
+- `:ArangoDocumentDuplicate` - buffer-local command that duplicates the current document buffer into a new draft with a fresh id
 - `:ArangoDocumentDelete` - buffer-local command that deletes the current document buffer, or discards a draft document
 - `:ArangoDocumentRelated` - buffer-local command that opens a related document from direct keys, nested relations, or reverse links in the current buffer
 
 ## Picker actions
 
-- Collections picker: `Enter` open collection, `Ctrl-a` create a draft document, `Ctrl-n` create a collection, `Ctrl-r` rename a collection, `Ctrl-t` truncate a collection, `Ctrl-x` open the actions menu, `Ctrl-b` go back to the database picker when available
-- Documents picker: `Ctrl-a` create a draft document in the current collection, `Ctrl-t` truncate the current collection after confirmation, `Ctrl-x` open the actions menu for the current document listing
+- Collections picker: `Enter` open collection, `Ctrl-a` create a draft document, `Ctrl-n` create a collection, `Ctrl-d` duplicate a collection, `Ctrl-r` rename a collection, `Ctrl-t` truncate a collection, `Ctrl-x` open the actions menu, `Ctrl-b` go back to the database picker when available
+- Documents picker: `Ctrl-a` create a draft document in the current collection, `Ctrl-y` duplicate the selected document into a new draft with a fresh id, `Ctrl-d` delete the selected document, `Ctrl-t` truncate the current collection after confirmation, `Ctrl-x` open the actions menu for the current document listing
 
 ## Lua API
 

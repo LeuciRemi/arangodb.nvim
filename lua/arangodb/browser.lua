@@ -40,6 +40,7 @@ local browse_collection
 local browse_collections
 local go_back
 local open_new_document
+local open_duplicate_document
 local refresh_collection_document_buffers
 
 local function plugin_options()
@@ -142,6 +143,9 @@ local function run_json(config, subcommand, extra)
   end
   if subcommand == "truncate-collection" then
     return client.truncate_collection(config, options.collection)
+  end
+  if subcommand == "duplicate-collection" then
+    return client.duplicate_collection(config, options.collection, options.name)
   end
   if subcommand == "search-related" then
     local value = options.value
@@ -472,6 +476,82 @@ local function draft_document_preview(collection, key)
   }, "\n")
 end
 
+local function json_pretty(value, indent, depth)
+  indent = indent or 2
+  depth = depth or 0
+
+  if value == vim.NIL then
+    return "null"
+  end
+
+  if type(value) ~= "table" then
+    return vim.json.encode(value)
+  end
+
+  local current_indent = string.rep(" ", depth * indent)
+  local next_indent = string.rep(" ", (depth + 1) * indent)
+
+  if is_list(value) then
+    if vim.tbl_isempty(value) then
+      return "[]"
+    end
+
+    local items = {}
+    for _, item in ipairs(value) do
+      items[#items + 1] = next_indent .. json_pretty(item, indent, depth + 1)
+    end
+
+    return string.format("[\n%s\n%s]", table.concat(items, ",\n"), current_indent)
+  end
+
+  local keys = {}
+  for key, _ in pairs(value) do
+    keys[#keys + 1] = key
+  end
+  table.sort(keys, function(left, right)
+    return tostring(left) < tostring(right)
+  end)
+
+  if #keys == 0 then
+    return "{}"
+  end
+
+  local items = {}
+  for _, key in ipairs(keys) do
+    items[#items + 1] = string.format(
+      "%s%s: %s",
+      next_indent,
+      vim.json.encode(tostring(key)),
+      json_pretty(value[key], indent, depth + 1)
+    )
+  end
+
+  return string.format("{\n%s\n%s}", table.concat(items, ",\n"), current_indent)
+end
+
+local function duplicated_document_payload(collection, document)
+  if type(document) ~= "table" then
+    error("Document payload must be a JSON object")
+  end
+
+  local target_collection = collection
+  if type(target_collection) ~= "string" or vim.trim(target_collection) == "" then
+    target_collection = type(document._id) == "string" and document._id:match("^([^/]+)/") or nil
+  end
+  target_collection = target_collection and vim.trim(target_collection) or ""
+  if target_collection == "" then
+    error("Missing collection name")
+  end
+
+  local key = generate_uuid()
+  local payload = vim.deepcopy(document)
+  payload._key = key
+  payload._id = draft_document_id(target_collection, key)
+  payload._rev = vim.NIL
+
+  return payload, key, target_collection
+end
+
 local function picker_current_item(current, item)
   if item and item.item then
     return item
@@ -690,6 +770,43 @@ local function truncate_collection_with_prompt(config, collection, callback, pic
       callback(result)
     end
   end, picker)
+end
+
+local function duplicate_collection_with_prompt(config, collection, callback, picker)
+  if not ensure_unmodified_document_buffers({
+    database = config.database,
+    collection = collection,
+  }, "duplicating this collection") then
+    restore_picker_input_focus(picker)
+    return
+  end
+
+  vim.ui.input({
+    prompt = string.format("Duplicate collection %s to: ", collection),
+    default = collection .. "_clone",
+  }, function(value)
+    local new_name = value and vim.trim(value) or ""
+    if value == nil or new_name == "" or new_name == collection then
+      restore_picker_input_focus(picker)
+      return
+    end
+
+    local result = try_json(config, "ArangoDB Duplicate Collection", "duplicate-collection", {
+      "--collection",
+      collection,
+      "--name",
+      new_name,
+    })
+    if not result then
+      restore_picker_input_focus(picker)
+      return
+    end
+
+    if callback then
+      callback(result, result.name or new_name)
+    end
+    restore_picker_input_focus(picker)
+  end)
 end
 
 local function choose_field(config, collection, picker, callback)
@@ -1443,6 +1560,31 @@ local function document_actions(config, buf)
     end)
   end
 
+  local function duplicate_document()
+    local ok, payload = pcall(get_current_document_payload, buf)
+    if not ok then
+      arango.notify_error(payload, "ArangoDB Duplicate")
+      return
+    end
+
+    local collection = vim.b[buf].arangodb_document_collection
+    if not collection then
+      arango.notify_error("Missing current collection", "ArangoDB Duplicate")
+      return
+    end
+
+    local document_id = vim.b[buf].arangodb_document_id
+    if vim.b[buf].arangodb_document_is_new ~= true and document_id then
+      push_history({
+        kind = "document",
+        config = config,
+        id = document_id,
+      })
+    end
+
+    open_duplicate_document(config, collection, payload)
+  end
+
   local function delete_document()
     if vim.b[buf].arangodb_document_is_new == true then
       if vim.fn.confirm("Discard this draft document?", "&Discard\n&Cancel", 2) ~= 1 then
@@ -1484,6 +1626,9 @@ local function document_actions(config, buf)
   if keymaps.delete then
     vim.keymap.set("n", keymaps.delete, delete_document, { buffer = buf, desc = "Delete Arango document" })
   end
+  if keymaps.duplicate then
+    vim.keymap.set("n", keymaps.duplicate, duplicate_document, { buffer = buf, desc = "Duplicate Arango document" })
+  end
   if keymaps.related then
     vim.keymap.set("n", keymaps.related, open_related_picker, { buffer = buf, desc = "Open related Arango document" })
   end
@@ -1496,6 +1641,9 @@ local function document_actions(config, buf)
   )
   vim.api.nvim_buf_create_user_command(buf, "ArangoDocumentDelete", delete_document, {
     desc = "Delete current Arango document",
+  })
+  vim.api.nvim_buf_create_user_command(buf, "ArangoDocumentDuplicate", duplicate_document, {
+    desc = "Duplicate current Arango document",
   })
   vim.api.nvim_buf_create_user_command(buf, "ArangoDocumentRelated", open_related_picker, {
     desc = "Open related Arango document",
@@ -1567,7 +1715,11 @@ function M.open_document(config, doc)
   vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, {
     virt_text = {
       { string.format(" ArangoDB%s %s/%s ", is_new and " draft" or "", vim.b[buf].arangodb_database, display_id), "Title" },
-      { is_new and "  :ArangoDocumentSave  :ArangoDocumentDelete" or "  :ArangoDocumentSave  :ArangoDocumentDelete  :ArangoDocumentRelated", "Comment" },
+      {
+        is_new and "  :ArangoDocumentSave  :ArangoDocumentDuplicate  :ArangoDocumentDelete"
+          or "  :ArangoDocumentSave  :ArangoDocumentDuplicate  :ArangoDocumentDelete  :ArangoDocumentRelated",
+        "Comment",
+      },
     },
     virt_text_pos = "right_align",
   })
@@ -1591,6 +1743,19 @@ open_new_document = function(config, collection, opts)
     collection = collection,
     document = payload,
     preview = draft_document_preview(collection, key),
+    is_new = true,
+  }, opts or {}))
+end
+
+open_duplicate_document = function(config, collection, document, opts)
+  local payload, key, target_collection = duplicated_document_payload(collection, document)
+  M.open_document(config, vim.tbl_extend("force", {
+    database = config.database,
+    id = payload._id,
+    key = key,
+    collection = target_collection,
+    document = payload,
+    preview = json_pretty(payload),
     is_new = true,
   }, opts or {}))
 end
@@ -1731,6 +1896,7 @@ browse_collections = function(config, opts)
 
     if collection then
       choices[#choices + 1] = { label = "Open collection (Enter)", action = "arango_open_collection" }
+      choices[#choices + 1] = { label = "Duplicate collection (Ctrl-d)", action = "arango_duplicate_collection" }
       choices[#choices + 1] = { label = "Rename collection (Ctrl-r)", action = "arango_rename_collection" }
       choices[#choices + 1] = { label = "Truncate collection (Ctrl-t)", action = "arango_truncate_collection" }
     end
@@ -1825,6 +1991,23 @@ browse_collections = function(config, opts)
           vim.notify(string.format("Collection %s created", result.name or collection), vim.log.levels.INFO)
         end)
       end,
+      arango_duplicate_collection = function(current, item)
+        local collection = selected_collection(current, item)
+        if not collection then
+          vim.notify("Select a collection first", vim.log.levels.INFO)
+          return
+        end
+
+        duplicate_collection_with_prompt(config, collection, function(result, new_name)
+          clear_collection_overview()
+          set_picker_search(current, new_name)
+          refresh_picker(current)
+          vim.notify(
+            string.format("Collection %s duplicated to %s (%d documents)", collection, new_name, result.copied_count or 0),
+            vim.log.levels.INFO
+          )
+        end, current)
+      end,
       arango_rename_collection = function(current, item)
         local collection = selected_collection(current, item)
         if not collection then
@@ -1865,6 +2048,7 @@ browse_collections = function(config, opts)
           ["<c-x>"] = { "arango_action_menu", mode = { "n", "i" }, desc = "Actions" },
           ["<c-a>"] = { "arango_create_document", mode = { "n", "i" }, desc = "Create Document" },
           ["<c-n>"] = { "arango_create_collection", mode = { "n", "i" }, desc = "Create Collection" },
+          ["<c-d>"] = { "arango_duplicate_collection", mode = { "n", "i" }, desc = "Duplicate Collection" },
           ["<c-r>"] = { "arango_rename_collection", mode = { "n", "i" }, desc = "Rename Collection" },
           ["<c-t>"] = { "arango_truncate_collection", mode = { "n", "i" }, desc = "Truncate Collection" },
           ["<c-b>"] = opts.allow_database_back and { "arango_pick_database", mode = { "n", "i" }, desc = "Choose Database" } or nil,
@@ -1875,6 +2059,7 @@ browse_collections = function(config, opts)
           ["<c-x>"] = { "arango_action_menu", mode = { "n" }, desc = "Actions" },
           ["<c-a>"] = { "arango_create_document", mode = { "n" }, desc = "Create Document" },
           ["<c-n>"] = { "arango_create_collection", mode = { "n" }, desc = "Create Collection" },
+          ["<c-d>"] = { "arango_duplicate_collection", mode = { "n" }, desc = "Duplicate Collection" },
           ["<c-r>"] = { "arango_rename_collection", mode = { "n" }, desc = "Rename Collection" },
           ["<c-t>"] = { "arango_truncate_collection", mode = { "n" }, desc = "Truncate Collection" },
           ["<c-b>"] = opts.allow_database_back and { "arango_pick_database", mode = { "n" }, desc = "Choose Database" } or nil,
@@ -1950,6 +2135,7 @@ browse_collection = function(config, collection, field, initial_search, opts)
 
     if selected and selected.item then
       choices[#choices + 1] = { label = "Open document (Enter)", action = "arango_open_document" }
+      choices[#choices + 1] = { label = "Duplicate document (Ctrl-y)", action = "arango_duplicate_document" }
       choices[#choices + 1] = { label = "Open related (Ctrl-o)", action = "arango_open_related" }
       choices[#choices + 1] = { label = "Delete document (Ctrl-d)", action = "arango_delete_document" }
     end
@@ -2095,6 +2281,22 @@ browse_collection = function(config, collection, field, initial_search, opts)
       arango_open_document = function(current, item)
         open_picker_document(current, item)
       end,
+      arango_duplicate_document = function(current, item)
+        local selected = picker_current_item(current, item)
+        if not selected or not selected.item or not selected.item.id then
+          vim.notify("Select a document first", vim.log.levels.INFO)
+          return
+        end
+
+        local payload = try_json(config, "ArangoDB", "get", { "--id", selected.item.id })
+        if not payload then
+          return
+        end
+
+        push_history(current_route())
+        close_picker(current)
+        open_duplicate_document(config, collection, payload.document or payload)
+      end,
       arango_create_document = function(current)
         push_history(current_route())
         close_picker(current)
@@ -2200,6 +2402,7 @@ browse_collection = function(config, collection, field, initial_search, opts)
         keys = {
           ["<c-x>"] = { "arango_action_menu", mode = { "n", "i" }, desc = "Actions" },
           ["<c-a>"] = { "arango_create_document", mode = { "n", "i" }, desc = "Create Document" },
+          ["<c-y>"] = { "arango_duplicate_document", mode = { "n", "i" }, desc = "Duplicate Document" },
           ["<c-p>"] = { "arango_prev_page", mode = { "n", "i" }, desc = "Previous Page" },
           ["<c-n>"] = { "arango_next_page", mode = { "n", "i" }, desc = "Next Page" },
           ["<c-f>"] = route_kind ~= "related" and { "arango_change_field", mode = { "n", "i" }, desc = "Change Filter Field" } or nil,
@@ -2214,6 +2417,7 @@ browse_collection = function(config, collection, field, initial_search, opts)
         keys = {
           ["<c-x>"] = { "arango_action_menu", mode = { "n" }, desc = "Actions" },
           ["<c-a>"] = { "arango_create_document", mode = { "n" }, desc = "Create Document" },
+          ["<c-y>"] = { "arango_duplicate_document", mode = { "n" }, desc = "Duplicate Document" },
           ["<c-p>"] = { "arango_prev_page", mode = { "n" }, desc = "Previous Page" },
           ["<c-n>"] = { "arango_next_page", mode = { "n" }, desc = "Next Page" },
           ["<c-f>"] = route_kind ~= "related" and { "arango_change_field", mode = { "n" }, desc = "Change Filter Field" } or nil,
