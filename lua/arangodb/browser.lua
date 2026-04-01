@@ -3,31 +3,7 @@ local M = {}
 
 local arango = require("arangodb.core")
 local client = require("arangodb.client")
-
-local function is_list(value)
-  if vim.islist then
-    return vim.islist(value)
-  end
-  if type(value) ~= "table" then
-    return false
-  end
-
-  local count = 0
-  for key, _ in pairs(value) do
-    if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
-      return false
-    end
-    count = count + 1
-  end
-
-  for index = 1, count do
-    if value[index] == nil then
-      return false
-    end
-  end
-
-  return true
-end
+local utils = require("arangodb.utils")
 
 -- Keep track of the active picker and of the back stack shared by picker views.
 local state = {
@@ -45,6 +21,84 @@ local refresh_collection_document_buffers
 
 local function plugin_options()
   return require("arangodb.config").get()
+end
+
+local function picker_options()
+  return plugin_options().picker_keymaps or {}
+end
+
+local function resolve_picker_preset(preset)
+  if type(preset) == "string" and preset ~= "" and preset ~= "auto" then
+    return preset
+  end
+
+  if vim.o.columns >= 160 then
+    return "default"
+  end
+
+  return "vertical"
+end
+
+local function picker_layout()
+  local layout = plugin_options().layout or {}
+  return {
+    preset = resolve_picker_preset(layout.preset),
+    preview = layout.preview ~= false,
+  }
+end
+
+local function picker_key(lhs, action, mode, desc, enabled)
+  if enabled == false or type(lhs) ~= "string" or lhs == "" then
+    return nil
+  end
+
+  return {
+    [lhs] = {
+      action,
+      mode = mode,
+      desc = desc,
+    },
+  }
+end
+
+local function merge_keymaps(...)
+  local merged = {}
+  for _, mappings in ipairs({ ... }) do
+    if type(mappings) == "table" then
+      merged = vim.tbl_extend("force", merged, mappings)
+    end
+  end
+  return merged
+end
+
+local function key_label(lhs)
+  if type(lhs) ~= "string" or lhs == "" then
+    return nil
+  end
+  return lhs
+end
+
+local function action_label(label, lhs)
+  local key = key_label(lhs)
+  if not key then
+    return label
+  end
+  return string.format("%s (%s)", label, key)
+end
+
+local function hint_text(parts)
+  local visible = {}
+  for _, part in ipairs(parts) do
+    if type(part) == "string" and part ~= "" then
+      visible[#visible + 1] = part
+    end
+  end
+
+  if #visible == 0 then
+    return ""
+  end
+
+  return "  [" .. table.concat(visible, "  ") .. "]"
 end
 
 local function get_snacks()
@@ -285,11 +339,14 @@ end
 local function title(database, collection, field, meta)
   local first = #meta.items > 0 and (meta.offset + 1) or 0
   local last = meta.offset + #meta.items
-  local hint = "  [^X actions  ^P/^N pages"
-  if #state.history > 0 then
-    hint = hint .. "  ^B back"
-  end
-  hint = hint .. "]"
+  local keymaps = picker_options()
+  local hint = hint_text({
+    key_label(keymaps.execute) and (keymaps.execute .. " actions") or nil,
+    key_label(keymaps.prev_page) and key_label(keymaps.next_page)
+        and string.format("%s/%s pages", keymaps.prev_page, keymaps.next_page)
+      or nil,
+    #state.history > 0 and key_label(keymaps.back) and (keymaps.back .. " back") or nil,
+  })
   local field_text = field_label(field)
   if meta.total_count ~= nil and (meta.search == nil or meta.search == "") then
     return string.format(
@@ -334,7 +391,11 @@ local function prompt_input(opts, callback)
 end
 
 local function collection_picker_title(database, search, allow_database_back)
-  local hint = allow_database_back and "  [^X actions  ^B back]" or "  [^X actions]"
+  local keymaps = picker_options()
+  local hint = hint_text({
+    key_label(keymaps.execute) and (keymaps.execute .. " actions") or nil,
+    allow_database_back and key_label(keymaps.back) and (keymaps.back .. " back") or nil,
+  })
   if search and search ~= "" then
     return string.format("Arango %s collections - %s%s", database, search, hint)
   end
@@ -474,59 +535,6 @@ local function draft_document_preview(collection, key)
     '  "_rev": null',
     "}",
   }, "\n")
-end
-
-local function json_pretty(value, indent, depth)
-  indent = indent or 2
-  depth = depth or 0
-
-  if value == vim.NIL then
-    return "null"
-  end
-
-  if type(value) ~= "table" then
-    return vim.json.encode(value)
-  end
-
-  local current_indent = string.rep(" ", depth * indent)
-  local next_indent = string.rep(" ", (depth + 1) * indent)
-
-  if is_list(value) then
-    if vim.tbl_isempty(value) then
-      return "[]"
-    end
-
-    local items = {}
-    for _, item in ipairs(value) do
-      items[#items + 1] = next_indent .. json_pretty(item, indent, depth + 1)
-    end
-
-    return string.format("[\n%s\n%s]", table.concat(items, ",\n"), current_indent)
-  end
-
-  local keys = {}
-  for key, _ in pairs(value) do
-    keys[#keys + 1] = key
-  end
-  table.sort(keys, function(left, right)
-    return tostring(left) < tostring(right)
-  end)
-
-  if #keys == 0 then
-    return "{}"
-  end
-
-  local items = {}
-  for _, key in ipairs(keys) do
-    items[#items + 1] = string.format(
-      "%s%s: %s",
-      next_indent,
-      vim.json.encode(tostring(key)),
-      json_pretty(value[key], indent, depth + 1)
-    )
-  end
-
-  return string.format("{\n%s\n%s}", table.concat(items, ",\n"), current_indent)
 end
 
 local function duplicated_document_payload(collection, document)
@@ -1067,7 +1075,7 @@ local function related_search_values(relation)
     values[#values + 1] = text
   end
 
-  if type(relation.values) == "table" and is_list(relation.values) then
+  if type(relation.values) == "table" and utils.is_list(relation.values) then
     for _, value in ipairs(relation.values) do
       add(value)
     end
@@ -1186,7 +1194,7 @@ local function related_values(document, collections)
     local inferred_collection = resolve_collection_name(info.base, resolved_collections)
 
     if info.multiple then
-      if type(value) == "table" and is_list(value) then
+      if type(value) == "table" and utils.is_list(value) then
         for _, item in ipairs(value) do
           add_field_relation(source, item, inferred_collection)
         end
@@ -1199,7 +1207,7 @@ local function related_values(document, collections)
   end
 
   local function add_relation_node(scope, node)
-    if scope == "" or type(node) ~= "table" or is_list(node) then
+    if scope == "" or type(node) ~= "table" or utils.is_list(node) then
       return false
     end
 
@@ -1230,7 +1238,7 @@ local function related_values(document, collections)
 
     local ids_source = source
     local ids = node._ids
-    if type(ids) == "table" and is_list(ids) then
+    if type(ids) == "table" and utils.is_list(ids) then
       for _, item in ipairs(ids) do
         if add_field_relation(ids_source, item, scope_collection) then
           added = true
@@ -1239,7 +1247,7 @@ local function related_values(document, collections)
     end
 
     local keys = node._keys
-    if type(keys) == "table" and is_list(keys) then
+    if type(keys) == "table" and utils.is_list(keys) then
       for _, item in ipairs(keys) do
         if add_field_relation(ids_source, item, scope_collection) then
           added = true
@@ -1257,10 +1265,10 @@ local function related_values(document, collections)
 
     local scope_collection = scope ~= "" and resolve_collection_name(path_tail(scope), resolved_collections) or nil
 
-    if is_list(value) then
+    if utils.is_list(value) then
       if scope_collection then
         for _, item in ipairs(value) do
-          if type(item) == "table" and not is_list(item) then
+          if type(item) == "table" and not utils.is_list(item) then
             add_relation_node(scope, item)
           else
             add_field_relation(scope, item, scope_collection)
@@ -1755,7 +1763,7 @@ open_duplicate_document = function(config, collection, document, opts)
     key = key,
     collection = target_collection,
     document = payload,
-    preview = json_pretty(payload),
+    preview = utils.json_pretty(payload),
     is_new = true,
   }, opts or {}))
 end
@@ -1893,16 +1901,17 @@ browse_collections = function(config, opts)
   local function open_action_menu(current, item)
     local collection = selected_collection(current, item)
     local choices = {}
+    local keymaps = picker_options()
 
     if collection then
       choices[#choices + 1] = { label = "Open collection (Enter)", action = "arango_open_collection" }
-      choices[#choices + 1] = { label = "Duplicate collection (Ctrl-d)", action = "arango_duplicate_collection" }
-      choices[#choices + 1] = { label = "Rename collection (Ctrl-r)", action = "arango_rename_collection" }
-      choices[#choices + 1] = { label = "Truncate collection (Ctrl-t)", action = "arango_truncate_collection" }
+      choices[#choices + 1] = { label = action_label("Duplicate collection", keymaps.delete), action = "arango_duplicate_collection" }
+      choices[#choices + 1] = { label = action_label("Rename collection", keymaps.rename), action = "arango_rename_collection" }
+      choices[#choices + 1] = { label = action_label("Truncate collection", keymaps.truncate), action = "arango_truncate_collection" }
     end
-    choices[#choices + 1] = { label = "Create collection (Ctrl-n)", action = "arango_create_collection" }
+    choices[#choices + 1] = { label = action_label("Create collection", keymaps.next_page), action = "arango_create_collection" }
     if opts.allow_database_back then
-      choices[#choices + 1] = { label = "Choose database (Ctrl-b)", action = "arango_pick_database" }
+      choices[#choices + 1] = { label = action_label("Choose database", keymaps.back), action = "arango_pick_database" }
     end
 
     vim.schedule(function()
@@ -1934,6 +1943,7 @@ browse_collections = function(config, opts)
   end
 
   local picker
+  local keymaps = picker_options()
   picker = snacks.picker({
     title = collection_picker_title(config.database, meta.search, opts.allow_database_back == true),
     search = meta.search,
@@ -1943,10 +1953,7 @@ browse_collections = function(config, opts)
     show_empty = true,
     auto_close = false,
     focus = "input",
-    layout = {
-      preset = "vertical",
-      preview = true,
-    },
+    layout = picker_layout,
     finder = function(_, ctx)
       local search = ctx.filter.search or ""
       local ok, items = pcall(collection_items, search)
@@ -2044,26 +2051,26 @@ browse_collections = function(config, opts)
     },
     win = {
       input = {
-        keys = {
-          ["<c-x>"] = { "arango_action_menu", mode = { "n", "i" }, desc = "Actions" },
-          ["<c-a>"] = { "arango_create_document", mode = { "n", "i" }, desc = "Create Document" },
-          ["<c-n>"] = { "arango_create_collection", mode = { "n", "i" }, desc = "Create Collection" },
-          ["<c-d>"] = { "arango_duplicate_collection", mode = { "n", "i" }, desc = "Duplicate Collection" },
-          ["<c-r>"] = { "arango_rename_collection", mode = { "n", "i" }, desc = "Rename Collection" },
-          ["<c-t>"] = { "arango_truncate_collection", mode = { "n", "i" }, desc = "Truncate Collection" },
-          ["<c-b>"] = opts.allow_database_back and { "arango_pick_database", mode = { "n", "i" }, desc = "Choose Database" } or nil,
-        },
+        keys = merge_keymaps(
+          picker_key(keymaps.execute, "arango_action_menu", { "n", "i" }, "Actions"),
+          picker_key(keymaps.create, "arango_create_document", { "n", "i" }, "Create Document"),
+          picker_key(keymaps.next_page, "arango_create_collection", { "n", "i" }, "Create Collection"),
+          picker_key(keymaps.delete, "arango_duplicate_collection", { "n", "i" }, "Duplicate Collection"),
+          picker_key(keymaps.rename, "arango_rename_collection", { "n", "i" }, "Rename Collection"),
+          picker_key(keymaps.truncate, "arango_truncate_collection", { "n", "i" }, "Truncate Collection"),
+          picker_key(keymaps.back, "arango_pick_database", { "n", "i" }, "Choose Database", opts.allow_database_back)
+        ),
       },
       list = {
-        keys = {
-          ["<c-x>"] = { "arango_action_menu", mode = { "n" }, desc = "Actions" },
-          ["<c-a>"] = { "arango_create_document", mode = { "n" }, desc = "Create Document" },
-          ["<c-n>"] = { "arango_create_collection", mode = { "n" }, desc = "Create Collection" },
-          ["<c-d>"] = { "arango_duplicate_collection", mode = { "n" }, desc = "Duplicate Collection" },
-          ["<c-r>"] = { "arango_rename_collection", mode = { "n" }, desc = "Rename Collection" },
-          ["<c-t>"] = { "arango_truncate_collection", mode = { "n" }, desc = "Truncate Collection" },
-          ["<c-b>"] = opts.allow_database_back and { "arango_pick_database", mode = { "n" }, desc = "Choose Database" } or nil,
-        },
+        keys = merge_keymaps(
+          picker_key(keymaps.execute, "arango_action_menu", { "n" }, "Actions"),
+          picker_key(keymaps.create, "arango_create_document", { "n" }, "Create Document"),
+          picker_key(keymaps.next_page, "arango_create_collection", { "n" }, "Create Collection"),
+          picker_key(keymaps.delete, "arango_duplicate_collection", { "n" }, "Duplicate Collection"),
+          picker_key(keymaps.rename, "arango_rename_collection", { "n" }, "Rename Collection"),
+          picker_key(keymaps.truncate, "arango_truncate_collection", { "n" }, "Truncate Collection"),
+          picker_key(keymaps.back, "arango_pick_database", { "n" }, "Choose Database", opts.allow_database_back)
+        ),
       },
     },
   })
@@ -2132,30 +2139,31 @@ browse_collection = function(config, collection, field, initial_search, opts)
   local function open_action_menu(current, item)
     local selected = picker_current_item(current, item)
     local choices = {}
+    local keymaps = picker_options()
 
     if selected and selected.item then
       choices[#choices + 1] = { label = "Open document (Enter)", action = "arango_open_document" }
-      choices[#choices + 1] = { label = "Duplicate document (Ctrl-y)", action = "arango_duplicate_document" }
-      choices[#choices + 1] = { label = "Open related (Ctrl-o)", action = "arango_open_related" }
-      choices[#choices + 1] = { label = "Delete document (Ctrl-d)", action = "arango_delete_document" }
+      choices[#choices + 1] = { label = action_label("Duplicate document", keymaps.duplicate), action = "arango_duplicate_document" }
+      choices[#choices + 1] = { label = action_label("Open related", keymaps.related), action = "arango_open_related" }
+      choices[#choices + 1] = { label = action_label("Delete document", keymaps.delete), action = "arango_delete_document" }
     end
-    choices[#choices + 1] = { label = "Create document (Ctrl-a)", action = "arango_create_document" }
-    choices[#choices + 1] = { label = "Truncate collection (Ctrl-t)", action = "arango_truncate_collection" }
+    choices[#choices + 1] = { label = action_label("Create document", keymaps.create), action = "arango_create_document" }
+    choices[#choices + 1] = { label = action_label("Truncate collection", keymaps.truncate), action = "arango_truncate_collection" }
 
     if route_kind ~= "related" then
-      choices[#choices + 1] = { label = "Change filter field (Ctrl-f)", action = "arango_change_field" }
+      choices[#choices + 1] = { label = action_label("Change filter field", keymaps.change_field), action = "arango_change_field" }
     end
     if meta.search ~= "" then
-      choices[#choices + 1] = { label = "Reset search (Ctrl-u)", action = "arango_reset_search" }
+      choices[#choices + 1] = { label = action_label("Reset search", keymaps.reset), action = "arango_reset_search" }
     end
     if meta.offset > 0 then
-      choices[#choices + 1] = { label = "Previous page (Ctrl-p)", action = "arango_prev_page" }
+      choices[#choices + 1] = { label = action_label("Previous page", keymaps.prev_page), action = "arango_prev_page" }
     end
     if meta.has_more then
-      choices[#choices + 1] = { label = "Next page (Ctrl-n)", action = "arango_next_page" }
+      choices[#choices + 1] = { label = action_label("Next page", keymaps.next_page), action = "arango_next_page" }
     end
     if #state.history > 0 then
-      choices[#choices + 1] = { label = "Go back (Ctrl-b)", action = "arango_go_back" }
+      choices[#choices + 1] = { label = action_label("Go back", keymaps.back), action = "arango_go_back" }
     end
 
     vim.schedule(function()
@@ -2224,6 +2232,7 @@ browse_collection = function(config, collection, field, initial_search, opts)
   end
 
   local picker
+  local keymaps = picker_options()
   picker = snacks.picker({
     title = picker_title or title(meta.database, meta.collection, meta.field, meta),
     search = meta.search,
@@ -2233,10 +2242,7 @@ browse_collection = function(config, collection, field, initial_search, opts)
     show_empty = true,
     auto_close = false,
     focus = "input",
-    layout = {
-      preset = "vertical",
-      preview = true,
-    },
+    layout = picker_layout,
     finder = function(_, ctx)
       local search = ctx.filter.search or ""
       local offset = search == meta.search and meta.offset or 0
@@ -2399,34 +2405,34 @@ browse_collection = function(config, collection, field, initial_search, opts)
     },
     win = {
       input = {
-        keys = {
-          ["<c-x>"] = { "arango_action_menu", mode = { "n", "i" }, desc = "Actions" },
-          ["<c-a>"] = { "arango_create_document", mode = { "n", "i" }, desc = "Create Document" },
-          ["<c-y>"] = { "arango_duplicate_document", mode = { "n", "i" }, desc = "Duplicate Document" },
-          ["<c-p>"] = { "arango_prev_page", mode = { "n", "i" }, desc = "Previous Page" },
-          ["<c-n>"] = { "arango_next_page", mode = { "n", "i" }, desc = "Next Page" },
-          ["<c-f>"] = route_kind ~= "related" and { "arango_change_field", mode = { "n", "i" }, desc = "Change Filter Field" } or nil,
-          ["<c-u>"] = { "arango_reset_search", mode = { "n", "i" }, desc = "Reset Search" },
-          ["<c-o>"] = { "arango_open_related", mode = { "n", "i" }, desc = "Open Related" },
-          ["<c-d>"] = { "arango_delete_document", mode = { "n", "i" }, desc = "Delete Document" },
-          ["<c-t>"] = { "arango_truncate_collection", mode = { "n", "i" }, desc = "Truncate Collection" },
-          ["<c-b>"] = { "arango_go_back", mode = { "n", "i" }, desc = "Go Back" },
-        },
+        keys = merge_keymaps(
+          picker_key(keymaps.execute, "arango_action_menu", { "n", "i" }, "Actions"),
+          picker_key(keymaps.create, "arango_create_document", { "n", "i" }, "Create Document"),
+          picker_key(keymaps.duplicate, "arango_duplicate_document", { "n", "i" }, "Duplicate Document"),
+          picker_key(keymaps.prev_page, "arango_prev_page", { "n", "i" }, "Previous Page"),
+          picker_key(keymaps.next_page, "arango_next_page", { "n", "i" }, "Next Page"),
+          picker_key(keymaps.change_field, "arango_change_field", { "n", "i" }, "Change Filter Field", route_kind ~= "related"),
+          picker_key(keymaps.reset, "arango_reset_search", { "n", "i" }, "Reset Search"),
+          picker_key(keymaps.related, "arango_open_related", { "n", "i" }, "Open Related"),
+          picker_key(keymaps.delete, "arango_delete_document", { "n", "i" }, "Delete Document"),
+          picker_key(keymaps.truncate, "arango_truncate_collection", { "n", "i" }, "Truncate Collection"),
+          picker_key(keymaps.back, "arango_go_back", { "n", "i" }, "Go Back")
+        ),
       },
       list = {
-        keys = {
-          ["<c-x>"] = { "arango_action_menu", mode = { "n" }, desc = "Actions" },
-          ["<c-a>"] = { "arango_create_document", mode = { "n" }, desc = "Create Document" },
-          ["<c-y>"] = { "arango_duplicate_document", mode = { "n" }, desc = "Duplicate Document" },
-          ["<c-p>"] = { "arango_prev_page", mode = { "n" }, desc = "Previous Page" },
-          ["<c-n>"] = { "arango_next_page", mode = { "n" }, desc = "Next Page" },
-          ["<c-f>"] = route_kind ~= "related" and { "arango_change_field", mode = { "n" }, desc = "Change Filter Field" } or nil,
-          ["<c-u>"] = { "arango_reset_search", mode = { "n" }, desc = "Reset Search" },
-          ["<c-o>"] = { "arango_open_related", mode = { "n" }, desc = "Open Related" },
-          ["<c-d>"] = { "arango_delete_document", mode = { "n" }, desc = "Delete Document" },
-          ["<c-t>"] = { "arango_truncate_collection", mode = { "n" }, desc = "Truncate Collection" },
-          ["<c-b>"] = { "arango_go_back", mode = { "n" }, desc = "Go Back" },
-        },
+        keys = merge_keymaps(
+          picker_key(keymaps.execute, "arango_action_menu", { "n" }, "Actions"),
+          picker_key(keymaps.create, "arango_create_document", { "n" }, "Create Document"),
+          picker_key(keymaps.duplicate, "arango_duplicate_document", { "n" }, "Duplicate Document"),
+          picker_key(keymaps.prev_page, "arango_prev_page", { "n" }, "Previous Page"),
+          picker_key(keymaps.next_page, "arango_next_page", { "n" }, "Next Page"),
+          picker_key(keymaps.change_field, "arango_change_field", { "n" }, "Change Filter Field", route_kind ~= "related"),
+          picker_key(keymaps.reset, "arango_reset_search", { "n" }, "Reset Search"),
+          picker_key(keymaps.related, "arango_open_related", { "n" }, "Open Related"),
+          picker_key(keymaps.delete, "arango_delete_document", { "n" }, "Delete Document"),
+          picker_key(keymaps.truncate, "arango_truncate_collection", { "n" }, "Truncate Collection"),
+          picker_key(keymaps.back, "arango_go_back", { "n" }, "Go Back")
+        ),
       },
     },
   })

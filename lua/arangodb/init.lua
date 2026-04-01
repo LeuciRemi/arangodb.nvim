@@ -26,6 +26,9 @@ local function apply_keymaps()
   set_keymap(keymaps.resume, function()
     M.resume()
   end, "ArangoDB Resume")
+  set_keymap(keymaps.back, function()
+    M.back()
+  end, "ArangoDB Back")
 
   keymaps_applied = true
 end

@@ -44,6 +44,25 @@ Plain `http://` URLs use the built-in Lua transport.
       keymaps = {
         browse = "<leader>ea",
         resume = "<leader>eA",
+        back = "<leader>eb",
+      },
+      picker_keymaps = {
+        execute = "<C-x>",
+        create = "<C-a>",
+        next_page = "<C-n>",
+        prev_page = "<C-p>",
+        back = "<C-b>",
+        change_field = "<C-f>",
+        reset = "<C-u>",
+        related = "<C-o>",
+        delete = "<C-d>",
+        duplicate = "<C-y>",
+        truncate = "<C-t>",
+        rename = "<C-r>",
+      },
+      layout = {
+        preset = "auto",
+        preview = true,
       },
       document_keymaps = {
         save = "<leader>w",
@@ -65,8 +84,37 @@ require("arangodb").setup({
     kore = "https://root:root@db.example.com:8529/kore",
   },
   default_database = "kore",
+  keymaps = {
+    browse = "<leader>ea",
+    resume = "<leader>eA",
+    back = "<leader>eb",
+  },
+  picker_keymaps = {
+    execute = "<C-x>",
+    create = "<C-a>",
+    next_page = "<C-n>",
+    prev_page = "<C-p>",
+    back = "<C-b>",
+    change_field = "<C-f>",
+    reset = "<C-u>",
+    related = "<C-o>",
+    delete = "<C-d>",
+    duplicate = "<C-y>",
+    truncate = "<C-t>",
+    rename = "<C-r>",
+  },
+  layout = {
+    preset = "auto",
+    preview = true,
+  },
   field_sample_size = 200,
   page_size = 50,
+  json_indent = 2,
+  truncate_length = 120,
+  max_field_depth = 4,
+  aql_batch_size = 1000,
+  default_sort = "doc._key ASC",
+  show_system_collections = false,
   http_timeout = 30000,
   tls_verify = true,
   tls_ca_file = nil,
@@ -79,12 +127,22 @@ require("arangodb").setup({
 - `default_database`: preferred database name or `{ name, url }`
 - `keymaps.browse`: global normal-mode keymap for `require("arangodb").browse()`
 - `keymaps.resume`: global normal-mode keymap for `require("arangodb").resume()`
+- `keymaps.back`: global normal-mode keymap for `require("arangodb").back()`
+- `picker_keymaps`: picker-local key bindings for actions such as create, pagination, related lookup, delete, duplicate, truncate, and rename
+- `layout.preset`: snacks picker layout preset; `"auto"` by default chooses a side-by-side layout on wide screens and a stacked layout on narrower screens
+- `layout.preview`: enable picker preview window (default: `true`)
 - `document_keymaps.save`: buffer-local keymap for saving the current document
 - `document_keymaps.delete`: buffer-local keymap for deleting the current document
 - `document_keymaps.duplicate`: buffer-local keymap for duplicating the current document into a new draft
 - `document_keymaps.related`: buffer-local keymap for opening related documents
 - `field_sample_size`: number of documents sampled when listing candidate filter fields
 - `page_size`: number of documents fetched per picker page
+- `json_indent`: indentation width used for JSON previews and document formatting (default: `2`)
+- `truncate_length`: max preview text length before truncation (default: `120`)
+- `max_field_depth`: recursion depth when discovering nested field paths (default: `4`)
+- `aql_batch_size`: cursor batch size used for AQL pagination (default: `1000`)
+- `default_sort`: AQL sort clause used in document listings and related searches (default: `"doc._key ASC"`)
+- `show_system_collections`: include ArangoDB system collections in collection listings (default: `false`)
 - `http_timeout`: timeout in milliseconds for ArangoDB HTTP requests
 - `tls_verify`: verify HTTPS certificates when using `https://` URLs (default: `true`)
 - `tls_ca_file`: custom CA bundle path passed to `curl --cacert` for `https://` URLs
@@ -125,8 +183,8 @@ export NVIM_ARANGO_KORE_URL='https://root:root@db.example.com:8529/kore'
 
 ## Picker actions
 
-- Collections picker: `Enter` open collection, `Ctrl-a` create a draft document, `Ctrl-n` create a collection, `Ctrl-d` duplicate a collection, `Ctrl-r` rename a collection, `Ctrl-t` truncate a collection, `Ctrl-x` open the actions menu, `Ctrl-b` go back to the database picker when available
-- Documents picker: `Ctrl-a` create a draft document in the current collection, `Ctrl-y` duplicate the selected document into a new draft with a fresh id, `Ctrl-d` delete the selected document, `Ctrl-t` truncate the current collection after confirmation, `Ctrl-x` open the actions menu for the current document listing
+- Collections picker defaults: `Enter` open collection, `Ctrl-a` create a draft document, `Ctrl-n` create a collection, `Ctrl-d` duplicate a collection, `Ctrl-r` rename a collection, `Ctrl-t` truncate a collection, `Ctrl-x` open the actions menu, `Ctrl-b` go back to the database picker when available
+- Documents picker defaults: `Ctrl-a` create a draft document in the current collection, `Ctrl-y` duplicate the selected document into a new draft with a fresh id, `Ctrl-d` delete the selected document, `Ctrl-t` truncate the current collection after confirmation, `Ctrl-x` open the actions menu for the current document listing, `Ctrl-f` change filter field, `Ctrl-u` reset search, `Ctrl-o` open related, `Ctrl-p` previous page, `Ctrl-n` next page, `Ctrl-b` go back
 
 ## Lua API
 
@@ -134,6 +192,7 @@ export NVIM_ARANGO_KORE_URL='https://root:root@db.example.com:8529/kore'
 require("arangodb").setup(opts)
 require("arangodb").browse({ database = "kore" })
 require("arangodb").resume()
+require("arangodb").back()
 ```
 
 ## Healthcheck
