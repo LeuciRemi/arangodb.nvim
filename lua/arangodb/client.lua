@@ -3,34 +3,14 @@ local M = {}
 
 local core = require("arangodb.core")
 local http = require("arangodb.http")
+local utils = require("arangodb.utils")
 
-local function is_list(value)
-  if vim.islist then
-    return vim.islist(value)
-  end
-  if type(value) ~= "table" then
-    return false
-  end
-
-  local count = 0
-  for key, _ in pairs(value) do
-    if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
-      return false
-    end
-    count = count + 1
-  end
-
-  for index = 1, count do
-    if value[index] == nil then
-      return false
-    end
-  end
-
-  return true
+local function plugin_options()
+  return require("arangodb.config").get()
 end
 
 local function timeout()
-  return require("arangodb.config").get().http_timeout or 30000
+  return plugin_options().http_timeout or 30000
 end
 
 local function database_root(config)
@@ -83,7 +63,7 @@ end
 
 --- Send an authenticated request through the transport configured for the database.
 local function request(config, method, path, payload)
-  local options = require("arangodb.config").get()
+  local options = plugin_options()
   local body = payload ~= nil and vim.json.encode(payload) or nil
   local response = http.request({
     method = method,
@@ -178,7 +158,7 @@ local function collection_size_bytes(figures)
   if type(figures.dead) == "table" then
     add(figures.dead.size)
   end
-  if type(figures.indexes) == "table" and is_list(figures.indexes) then
+  if type(figures.indexes) == "table" and utils.is_list(figures.indexes) then
     for _, index in ipairs(figures.indexes) do
       if type(index) == "table" then
         add(index.size)
@@ -189,59 +169,6 @@ local function collection_size_bytes(figures)
   return found and size or nil
 end
 
-local function json_pretty(value, indent, depth)
-  indent = indent or 2
-  depth = depth or 0
-
-  if value == vim.NIL then
-    return "null"
-  end
-
-  if type(value) ~= "table" then
-    return vim.json.encode(value)
-  end
-
-  local current_indent = string.rep(" ", depth * indent)
-  local next_indent = string.rep(" ", (depth + 1) * indent)
-
-  if is_list(value) then
-    if vim.tbl_isempty(value) then
-      return "[]"
-    end
-
-    local items = {}
-    for _, item in ipairs(value) do
-      items[#items + 1] = next_indent .. json_pretty(item, indent, depth + 1)
-    end
-
-    return string.format("[\n%s\n%s]", table.concat(items, ",\n"), current_indent)
-  end
-
-  local keys = {}
-  for key, _ in pairs(value) do
-    keys[#keys + 1] = key
-  end
-  table.sort(keys, function(left, right)
-    return tostring(left) < tostring(right)
-  end)
-
-  if #keys == 0 then
-    return "{}"
-  end
-
-  local items = {}
-  for _, key in ipairs(keys) do
-    items[#items + 1] = string.format(
-      "%s%s: %s",
-      next_indent,
-      vim.json.encode(tostring(key)),
-      json_pretty(value[key], indent, depth + 1)
-    )
-  end
-
-  return string.format("{\n%s\n%s}", table.concat(items, ",\n"), current_indent)
-end
-
 local function wrap_document(document, database)
   local document_id = document._id
   return {
@@ -250,7 +177,7 @@ local function wrap_document(document, database)
     key = document._key,
     collection = type(document_id) == "string" and document_id:match("^([^/]+)/") or nil,
     document = document,
-    preview = json_pretty(document),
+    preview = utils.json_pretty(document),
   }
 end
 
@@ -267,7 +194,7 @@ end
 local function run_aql(config, query, bind_vars, batch_size)
   local payload = {
     query = query,
-    batchSize = batch_size or 1000,
+    batchSize = batch_size or plugin_options().aql_batch_size or 1000,
     count = true,
   }
   if bind_vars and not vim.tbl_isempty(bind_vars) then
@@ -301,16 +228,16 @@ local function collect_field_paths(value, prefix, result, depth, max_depth)
   prefix = prefix or ""
   result = result or {}
   depth = depth or 0
-  max_depth = max_depth or 4
+  max_depth = max_depth or plugin_options().max_field_depth or 4
 
-  if depth >= max_depth or type(value) ~= "table" or is_list(value) then
+  if depth >= max_depth or type(value) ~= "table" or utils.is_list(value) then
     return result
   end
 
   for key, nested in pairs(value) do
     local path = prefix ~= "" and (prefix .. "." .. key) or key
     result[path] = true
-    if type(nested) == "table" and not is_list(nested) then
+    if type(nested) == "table" and not utils.is_list(nested) then
       collect_field_paths(nested, path, result, depth + 1, max_depth)
     end
   end
@@ -400,7 +327,7 @@ local function related_search_values(value)
     values[#values + 1] = text
   end
 
-  if type(value) == "table" and is_list(value) then
+  if type(value) == "table" and utils.is_list(value) then
     for _, item in ipairs(value) do
       add(item)
     end
@@ -416,7 +343,7 @@ local function related_search_values(value)
 end
 
 local function truncate_text(value, max_length)
-  max_length = max_length or 120
+  max_length = max_length or plugin_options().truncate_length or 120
 
   local text
   if type(value) == "string" then
@@ -464,7 +391,7 @@ function M.list_collection_details(config)
   local collections = {}
 
   for _, item in ipairs(data.result or {}) do
-    if not item.isSystem then
+    if plugin_options().show_system_collections or not item.isSystem then
       collections[#collections + 1] = {
         name = item.name,
         id = item.id,
@@ -612,7 +539,7 @@ function M.save_document(config, document)
     collection = collection,
     meta = saved,
     document = current,
-    preview = json_pretty(current),
+    preview = utils.json_pretty(current),
   }
 end
 
@@ -684,7 +611,7 @@ function M.create_document(config, collection, document)
     collection = target_collection,
     meta = created,
     document = current,
-    preview = json_pretty(current),
+    preview = utils.json_pretty(current),
   }
 end
 
@@ -797,7 +724,7 @@ function M.search_related(config, field, value, limit, collection)
     local query = table.concat({
       "FOR doc IN @@collection",
       "FILTER " .. filter_clause,
-      "SORT doc._key",
+      "SORT " .. (plugin_options().default_sort or "doc._key ASC"),
       "LIMIT @limit",
       "RETURN doc",
     }, "\n")
@@ -850,7 +777,7 @@ function M.browse_related_collection(config, collection, field, value, search, o
   end
 
   vim.list_extend(query_lines, {
-    "SORT doc._key",
+    "SORT " .. (plugin_options().default_sort or "doc._key ASC"),
     "LIMIT @offset, @limit",
     "RETURN doc",
   })
@@ -871,7 +798,7 @@ function M.browse_related_collection(config, collection, field, value, search, o
       field = fields,
       field_value = nil,
       field_value_text = related_field_value_text(document, fields),
-      preview = json_pretty(document),
+      preview = utils.json_pretty(document),
     }
   end
 
@@ -913,7 +840,7 @@ function M.browse_collection(config, collection, field, search, offset, limit)
   }
   vim.list_extend(query_lines, filters)
   vim.list_extend(query_lines, {
-    "SORT doc._key",
+    "SORT " .. (plugin_options().default_sort or "doc._key ASC"),
     "LIMIT @offset, @limit",
     "RETURN doc",
   })
@@ -935,7 +862,7 @@ function M.browse_collection(config, collection, field, search, offset, limit)
       field = field,
       field_value = value,
       field_value_text = truncate_text(value),
-      preview = json_pretty(document),
+      preview = utils.json_pretty(document),
     }
   end
 

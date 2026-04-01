@@ -55,6 +55,25 @@ Example with lazy.nvim:
         keymaps = {
           browse = "<leader>ea",
           resume = "<leader>eA",
+          back = "<leader>eb",
+        },
+        picker_keymaps = {
+          execute = "<C-x>",
+          create = "<C-a>",
+          next_page = "<C-n>",
+          prev_page = "<C-p>",
+          back = "<C-b>",
+          change_field = "<C-f>",
+          reset = "<C-u>",
+          related = "<C-o>",
+          delete = "<C-d>",
+          duplicate = "<C-y>",
+          truncate = "<C-t>",
+          rename = "<C-r>",
+        },
+        layout = {
+          preset = "auto",
+          preview = true,
         },
       })
     end,
@@ -66,12 +85,30 @@ Supported options:
 - `connections`
 - `default_database`
 - `keymaps`
+- `picker_keymaps`
+- `layout`
 - `document_keymaps`
 - `field_sample_size`
 - `page_size`
+- `json_indent`
+- `truncate_length`
+- `max_field_depth`
+- `aql_batch_size`
+- `default_sort`
+- `show_system_collections`
 - `http_timeout`
 - `tls_verify`
 - `tls_ca_file`
+
+`keymaps` supports `browse`, `resume`, and `back`.
+
+`picker_keymaps` supports `execute`, `create`, `next_page`, `prev_page`,
+`back`, `change_field`, `reset`, `related`, `delete`, `duplicate`,
+`truncate`, and `rename`.
+
+`layout` supports `preset` and `preview`. `preset = "auto"` uses a
+side-by-side list/preview layout on wide screens and a stacked layout on
+narrower screens.
 
 `document_keymaps` supports `save`, `delete`, `duplicate`, and `related`.
 
@@ -93,7 +130,7 @@ COMMANDS                                              *arangodb.nvim-commands*
     Open the ArangoDB browser. When a database is passed, skip the database
     picker and open the collections picker for that database directly.
 
-    Collections picker actions:
+    Default collection picker actions:
     - <Enter> opens the selected collection
     - <C-a> opens a draft document buffer for the selected collection
     - <C-n> creates a collection
@@ -103,12 +140,18 @@ COMMANDS                                              *arangodb.nvim-commands*
     - <C-x> opens the collection actions menu
     - <C-b> returns to the database picker when the current view came from it
 
-    In document listings:
+    Default document picker actions:
     - <C-a> opens a new draft document in the current collection
     - <C-y> duplicates the selected document into a draft with a fresh id
     - <C-d> deletes the selected document
     - <C-t> truncates the current collection after confirmation
     - <C-x> opens the actions menu for the current document listing
+    - <C-f> changes the active filter field
+    - <C-u> resets the current search
+    - <C-o> opens related documents
+    - <C-p> goes to the previous page
+    - <C-n> goes to the next page
+    - <C-b> returns to the previous picker route
 
                                                         *:ArangoResume*
 :ArangoResume

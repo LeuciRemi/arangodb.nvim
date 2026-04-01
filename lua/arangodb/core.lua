@@ -1,6 +1,8 @@
 --- Shared helpers for connection discovery, URL handling, and notifications.
 local M = {}
 
+local utils = require("arangodb.utils")
+
 local URL_SCHEMES = {
   http = "http",
   https = "https",
@@ -10,31 +12,6 @@ local ENV_SCHEME_ALIASES = {
   ssl = "https",
   tls = "https",
 }
-
-local function is_list(value)
-  if vim.islist then
-    return vim.islist(value)
-  end
-  if type(value) ~= "table" then
-    return false
-  end
-
-  local count = 0
-  for key, _ in pairs(value) do
-    if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
-      return false
-    end
-    count = count + 1
-  end
-
-  for index = 1, count do
-    if value[index] == nil then
-      return false
-    end
-  end
-
-  return true
-end
 
 local function plugin_config()
   return require("arangodb.config").get()
@@ -203,7 +180,7 @@ local function collect_connections(source, items, seen)
     return
   end
 
-  if is_list(source) then
+  if utils.is_list(source) then
     for _, entry in ipairs(source) do
       if type(entry) == "table" then
         add_connection(items, seen, entry.name, entry.url)
