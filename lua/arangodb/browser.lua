@@ -43,8 +43,29 @@ end
 
 local function picker_layout()
   local layout = plugin_options().layout or {}
+  local preset = resolve_picker_preset(layout.preset)
+  if preset == "vertical" then
+    return {
+      preset = "vertical",
+      preview = layout.preview ~= false,
+      layout = {
+        backdrop = true,
+        width = 0.5,
+        min_width = 80,
+        height = 0.8,
+        min_height = 30,
+        box = "vertical",
+        border = true,
+        title = "{title} {live} {flags}",
+        title_pos = "center",
+        { win = "input", height = 1, border = "bottom" },
+        { win = "list", border = "none" },
+        { win = "preview", title = "{preview}", height = 0.4, border = "top" },
+      },
+    }
+  end
   return {
-    preset = resolve_picker_preset(layout.preset),
+    preset = preset,
     preview = layout.preview ~= false,
   }
 end
