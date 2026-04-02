@@ -9,6 +9,8 @@ local utils = require("arangodb.utils")
 local state = {
   picker = nil,
   history = {},
+  current_view = nil,
+  view_meta = nil,
 }
 
 local ns = vim.api.nvim_create_namespace("arangodb.nvim")
@@ -1430,7 +1432,7 @@ local function related_route_title(route)
   return route.field or "related"
 end
 
-local function open_route(route)
+local function open_route(route, prev_picker)
   if not route or type(route) ~= "table" then
     return
   end
@@ -1441,7 +1443,7 @@ local function open_route(route)
       document_field = route.document_field or "_key",
       document_search = route.document_search or "",
       allow_database_back = route.allow_database_back == true,
-    })
+    }, prev_picker)
     return
   end
 
@@ -1460,7 +1462,7 @@ local function open_route(route)
       offset = route.offset,
       values = route.values,
       prompt = route.prompt,
-    })
+    }, prev_picker)
     return
   end
 
@@ -1468,7 +1470,7 @@ local function open_route(route)
     kind = route.kind or "collection",
     title = route.title,
     offset = route.offset,
-  })
+  }, prev_picker)
 end
 
 local function related_browse_payload(opts)
@@ -1483,11 +1485,7 @@ go_back = function(current)
     return
   end
 
-  if current and not current.closed then
-    close_picker(current)
-  end
-
-  open_route(route)
+  open_route(route, current)
 end
 
 --- Global entry point for :ArangoBack.
@@ -1506,11 +1504,7 @@ local function jump_to_related(config, relation, current, context)
     push_history(context)
   end
 
-  if current and not current.closed then
-    close_picker(current)
-  end
-
-  open_route(route)
+  open_route(route, current)
 end
 
 --- Attach buffer-local commands, keymaps, and :write integration to a document.
@@ -1783,7 +1777,7 @@ local function update_collection_picker_title(picker, config, search, allow_data
 end
 
 --- Open the collections picker for the selected database.
-browse_collections = function(config, opts)
+browse_collections = function(config, opts, prev_picker)
   local snacks = get_snacks()
   if not snacks then
     return
@@ -1881,8 +1875,7 @@ browse_collections = function(config, opts)
     end
 
     push_history(collections_route(config, opts, current_search(current)))
-    close_picker(current)
-    browse_collection(config, collection, opts.document_field or "_key", opts.document_search or "")
+    browse_collection(config, collection, opts.document_field or "_key", opts.document_search or "", {}, current)
   end
 
   local function create_document(current, item)
@@ -1973,6 +1966,9 @@ browse_collections = function(config, opts)
     on_show = function(current)
       state.picker = current
       update_collection_picker_title(current, config, current_search(current), opts.allow_database_back == true)
+      if prev_picker and not prev_picker.closed then
+        prev_picker:close()
+      end
     end,
     on_change = function(current)
       state.picker = current
@@ -2083,7 +2079,7 @@ browse_collections = function(config, opts)
 end
 
 --- Open the document picker for a collection or related-document route.
-browse_collection = function(config, collection, field, initial_search, opts)
+browse_collection = function(config, collection, field, initial_search, opts, prev_picker)
   local snacks = get_snacks()
   if not snacks then
     return
@@ -2267,6 +2263,9 @@ browse_collection = function(config, collection, field, initial_search, opts)
         current:update_titles()
       else
         update_picker_title(current, meta)
+      end
+      if prev_picker and not prev_picker.closed then
+        prev_picker:close()
       end
     end,
     on_change = function(current)
