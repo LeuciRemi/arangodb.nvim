@@ -14,6 +14,7 @@ local state = {
 }
 
 local ns = vim.api.nvim_create_namespace("arangodb.nvim")
+local backdrop_augroup = vim.api.nvim_create_augroup("arangodb_nvim_picker_backdrop", { clear = true })
 local browse_collection
 local browse_collections
 local go_back
@@ -68,6 +69,68 @@ local function picker_layout()
     preset = preset,
     preview = layout.preview ~= false,
   }
+end
+
+local function restore_picker_backdrop(picker)
+  if not picker or picker.closed or not picker.layout or not picker.layout.root then
+    return
+  end
+
+  local root = picker.layout.root
+  if root.opts and root.opts.backdrop then
+    pcall(function()
+      root:drop()
+    end)
+  end
+end
+
+local function watch_picker_backdrop(picker)
+  if not picker or picker.closed or not picker.layout or not picker.layout.root then
+    return
+  end
+
+  local root_win = picker.layout.root.win
+  if not root_win or not vim.api.nvim_win_is_valid(root_win) then
+    return
+  end
+
+  vim.api.nvim_clear_autocmds({ group = backdrop_augroup })
+  vim.api.nvim_create_autocmd({ "FocusGained", "WinEnter" }, {
+    group = backdrop_augroup,
+    callback = function()
+      if picker.closed then
+        return true
+      end
+      vim.schedule(function()
+        restore_picker_backdrop(picker)
+      end)
+    end,
+  })
+end
+
+local function picker_select_options(opts)
+  opts = vim.deepcopy(opts or {})
+  opts.snacks = vim.tbl_deep_extend("force", {
+    layout = {
+      preset = "select",
+      layout = {
+        backdrop = true,
+      },
+    },
+    win = {
+      input = {
+        wo = {
+          winhighlight = "Normal:Pmenu,NormalFloat:Pmenu,FloatBorder:FloatBorder,FloatTitle:Title",
+        },
+      },
+      list = {
+        wo = {
+          winhighlight = "Normal:Pmenu,NormalFloat:Pmenu,CursorLine:PmenuSel",
+        },
+      },
+    },
+  }, opts.snacks or {})
+  return opts
 end
 
 local function picker_key(lhs, action, mode, desc, enabled)
@@ -398,7 +461,7 @@ local function title(database, collection, field, meta)
 end
 
 local function prompt_select(items, opts, callback)
-  vim.ui.select(items, opts, function(choice)
+  vim.ui.select(items, picker_select_options(opts), function(choice)
     if choice then
       callback(choice)
     end
@@ -1986,6 +2049,8 @@ browse_collections = function(config, opts, prev_picker)
     end,
     on_show = function(current)
       state.picker = current
+      restore_picker_backdrop(current)
+      watch_picker_backdrop(current)
       update_collection_picker_title(current, config, current_search(current), opts.allow_database_back == true)
       if prev_picker and not prev_picker.closed then
         prev_picker:close()
@@ -2279,6 +2344,8 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
     end,
     on_show = function(current)
       state.picker = current
+      restore_picker_backdrop(current)
+      watch_picker_backdrop(current)
       if picker_title then
         current.title = picker_title
         current:update_titles()
@@ -2522,6 +2589,8 @@ end
 function M.resume()
   if state.picker and not state.picker.closed then
     state.picker:show()
+    restore_picker_backdrop(state.picker)
+    watch_picker_backdrop(state.picker)
     state.picker:focus("input", { show = true })
     return
   end
