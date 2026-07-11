@@ -26,6 +26,10 @@ end
 
 --- Decode a JSON response and turn ArangoDB API failures into Lua errors.
 local function decode_json_response(response)
+  if type(response) ~= "table" or type(response.status) ~= "number" then
+    error("Invalid response from the ArangoDB HTTP transport")
+  end
+
   local body = response.body or ""
   local decoded = nil
 
@@ -207,7 +211,16 @@ local function run_aql(config, query, bind_vars, batch_size)
 
   local extra = data.extra
   local cursor_id = data.id
-  while data.hasMore and cursor_id do
+  local seen_cursors = {}
+  while data.hasMore do
+    if not cursor_id or cursor_id == "" then
+      error("ArangoDB returned an incomplete cursor response")
+    end
+    if seen_cursors[cursor_id] then
+      error("ArangoDB returned a repeated cursor id")
+    end
+    seen_cursors[cursor_id] = true
+
     data = database_request(config, "PUT", "/_api/cursor/" .. core.url_encode(cursor_id))
     vim.list_extend(result, data.result or {})
     if extra == nil then
@@ -579,9 +592,7 @@ local function sanitize_new_document(collection, document)
 
   local payload = vim.deepcopy(document)
   payload._id = nil
-  if payload._rev == vim.NIL or payload._rev == "" then
-    payload._rev = nil
-  end
+  payload._rev = nil
 
   return collection, key, payload
 end
@@ -669,6 +680,17 @@ function M.truncate_collection(config, collection)
   }
 end
 
+--- Delete a collection. This internal helper is also used by integration cleanup.
+function M.delete_collection(config, collection)
+  local deleted = database_request(config, "DELETE", collection_path(collection))
+
+  return {
+    database = config.database,
+    name = collection,
+    collection = deleted,
+  }
+end
+
 --- Create a new collection and copy every document from the source collection.
 function M.duplicate_collection(config, source, target)
   source = vim.trim(source or "")
@@ -692,13 +714,25 @@ function M.duplicate_collection(config, source, target)
   local created = M.create_collection(config, target, collection_type)
   local target_name = created.name or target
 
-  run_aql(config, table.concat({
-    "FOR doc IN @@source",
-    "INSERT UNSET(doc, \"_id\", \"_rev\") INTO @@target",
-  }, "\n"), {
-    ["@source"] = source,
-    ["@target"] = target_name,
-  })
+  local copied, copy_error = pcall(
+    run_aql,
+    config,
+    table.concat({
+      "FOR doc IN @@source",
+      'INSERT UNSET(doc, "_id", "_rev") INTO @@target',
+    }, "\n"),
+    {
+      ["@source"] = source,
+      ["@target"] = target_name,
+    }
+  )
+  if not copied then
+    local cleaned, cleanup_error = pcall(M.delete_collection, config, target_name)
+    if not cleaned then
+      error(string.format("%s (cleanup also failed: %s)", tostring(copy_error), tostring(cleanup_error)), 0)
+    end
+    error(copy_error, 0)
+  end
 
   return {
     database = config.database,

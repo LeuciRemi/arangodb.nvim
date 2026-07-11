@@ -1,29 +1,29 @@
 # arangodb.nvim
 
-Browse and edit ArangoDB documents from Neovim.
+[![CI](https://github.com/LeuciRemi/arangodb.nvim/actions/workflows/ci.yml/badge.svg)](https://github.com/LeuciRemi/arangodb.nvim/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-This plugin extracts the ArangoDB browser workflow from my personal config into a reusable Neovim plugin with a small public API, user commands, and a healthcheck.
+Browse, edit, and manage ArangoDB data without leaving Neovim.
+
+English | [Français](README.fr.md) | [`:help arangodb.nvim`](doc/arangodb.nvim.txt)
 
 ## Features
 
-- Pick a database and manage collections from inside Neovim
-- Search documents live with `snacks.nvim`
-- Open documents in JSON buffers and save them back to ArangoDB
-- Create draft documents with prefilled `_key`, `_id`, and `_rev`, then insert them on first save
-- Jump to related documents from direct foreign keys, nested relation objects, and reverse links discovered in other collections
-- Create, duplicate, rename, and truncate collections from the collections picker
-- Duplicate draftable documents, delete documents, rename collections, and truncate collections
-- Discover databases from environment variables or explicit connection config
+- Browse databases, collections, and documents with `snacks.nvim`.
+- Search any sampled document field with paginated AQL queries.
+- Edit JSON documents in regular buffers and save them with `:write`.
+- Create or duplicate documents as drafts before inserting them.
+- Create, duplicate, rename, and truncate document or edge collections.
+- Follow direct foreign keys, nested relation objects, and inferred reverse links.
+- Connect over HTTP with the built-in Lua transport or HTTPS through `curl`.
+- Diagnose the local setup with `:checkhealth arangodb`.
 
 ## Requirements
 
-- Neovim `>= 0.9`
-- `folke/snacks.nvim`
-- `curl` for `https://` connections
-
-The plugin now talks to ArangoDB through a built-in Lua HTTP client.
-Plain `http://` URLs use the built-in Lua transport.
-`https://` URLs are supported through `curl`.
+- Neovim `>= 0.10` (CI covers `0.10.4` and the current stable release).
+- [`folke/snacks.nvim`](https://github.com/folke/snacks.nvim) with its picker enabled; `v2.31.0` is tested in CI.
+- `curl` for HTTPS connections. Plain HTTP uses the built-in libuv transport.
+- An ArangoDB server reachable through its HTTP API. Integration tests cover ArangoDB `3.12`.
 
 ## Installation
 
@@ -33,65 +33,55 @@ Plain `http://` URLs use the built-in Lua transport.
 {
   "LeuciRemi/arangodb.nvim",
   dependencies = {
-    "folke/snacks.nvim",
+    { "folke/snacks.nvim", opts = { picker = { enabled = true } } },
   },
-  config = function()
-    require("arangodb").setup({
-      default_database = "_system",
-      connections = {
-        _system = "http://root:root@127.0.0.1:8529/_system",
-      },
-      keymaps = {
-        browse = "<leader>ea",
-        resume = "<leader>eA",
-        back = "<leader>eb",
-      },
-      picker_keymaps = {
-        execute = "<C-x>",
-        create = "<C-a>",
-        next_page = "<C-n>",
-        prev_page = "<C-p>",
-        back = "<C-b>",
-        change_field = "<C-f>",
-        reset = "<C-u>",
-        related = "<C-o>",
-        delete = "<C-d>",
-        duplicate = "<C-y>",
-        truncate = "<C-t>",
-        rename = "<C-r>",
-      },
-      layout = {
-        preset = "auto",
-        preview = true,
-      },
-      document_keymaps = {
-        save = "<leader>w",
-        delete = "<leader>d",
-        duplicate = "<leader>y",
-        related = "gr",
-      },
-    })
-  end,
+  opts = {
+    connections = {
+      local_db = "http://root:password@127.0.0.1:8529/my_database",
+    },
+    default_database = "local_db",
+  },
 }
 ```
 
-## Setup
+### vim-plug
+
+```vim
+Plug 'folke/snacks.nvim'
+Plug 'LeuciRemi/arangodb.nvim'
+```
+
+Then configure both plugins from Lua:
+
+```lua
+require("snacks").setup({ picker = { enabled = true } })
+require("arangodb").setup({
+  connections = {
+    local_db = "http://root:password@127.0.0.1:8529/my_database",
+  },
+})
+```
+
+## Configuration
+
+Calling `setup()` is recommended, even when connections are supplied only through environment variables.
 
 ```lua
 require("arangodb").setup({
-  connections = {
-    _system = "http://root:root@127.0.0.1:8529/_system",
-    kore = "https://root:root@db.example.com:8529/kore",
-  },
-  default_database = "kore",
+  connections = nil,
+  default_database = nil,
+  auto_discover = false,
+
   keymaps = {
-    browse = "<leader>ea",
-    resume = "<leader>eA",
-    back = "<leader>eb",
+    browse = nil,
+    resume = nil,
+    back = nil,
   },
   picker_keymaps = {
     execute = "<C-x>",
     create = "<C-a>",
+    create_collection = "<C-n>",
+    duplicate_collection = "<C-d>",
     next_page = "<C-n>",
     prev_page = "<C-p>",
     back = "<C-b>",
@@ -103,6 +93,13 @@ require("arangodb").setup({
     truncate = "<C-t>",
     rename = "<C-r>",
   },
+  document_keymaps = {
+    save = nil,
+    delete = nil,
+    duplicate = nil,
+    related = nil,
+  },
+
   layout = {
     preset = "auto",
     preview = true,
@@ -121,94 +118,133 @@ require("arangodb").setup({
 })
 ```
 
-### Options
+Set any keymap to `false` to disable it. Global keymaps are unset by default so the plugin does not claim user mappings. `layout.preset = "auto"` selects a side-by-side view on wide screens and a stacked view on smaller screens.
 
-- `connections`: table of named connection URLs, either `{ name = url }` or `{ { name = "db", url = "..." } }`; accepts `http://` and `https://`
-- `default_database`: preferred database name or `{ name, url }`
-- `keymaps.browse`: global normal-mode keymap for `require("arangodb").browse()`
-- `keymaps.resume`: global normal-mode keymap for `require("arangodb").resume()`
-- `keymaps.back`: global normal-mode keymap for `require("arangodb").back()`
-- `picker_keymaps`: picker-local key bindings for actions such as create, pagination, related lookup, delete, duplicate, truncate, and rename
-- `layout.preset`: snacks picker layout preset; `"auto"` by default chooses a side-by-side layout on wide screens and a stacked layout on narrower screens
-- `layout.preview`: enable picker preview window (default: `true`)
-- `document_keymaps.save`: buffer-local keymap for saving the current document
-- `document_keymaps.delete`: buffer-local keymap for deleting the current document
-- `document_keymaps.duplicate`: buffer-local keymap for duplicating the current document into a new draft
-- `document_keymaps.related`: buffer-local keymap for opening related documents
-- `field_sample_size`: number of documents sampled when listing candidate filter fields
-- `page_size`: number of documents fetched per picker page
-- `json_indent`: indentation width used for JSON previews and document formatting (default: `2`)
-- `truncate_length`: max preview text length before truncation (default: `120`)
-- `max_field_depth`: recursion depth when discovering nested field paths (default: `4`)
-- `aql_batch_size`: cursor batch size used for AQL pagination (default: `1000`)
-- `default_sort`: AQL sort clause used in document listings and related searches (default: `"doc._key ASC"`)
-- `show_system_collections`: include ArangoDB system collections in collection listings (default: `false`)
-- `http_timeout`: timeout in milliseconds for ArangoDB HTTP requests
-- `tls_verify`: verify HTTPS certificates when using `https://` URLs (default: `true`)
-- `tls_ca_file`: custom CA bundle path passed to `curl --cacert` for `https://` URLs
+`auto_discover` is deliberately disabled by default. When enabled, the plugin queries `/_api/database/user` using the `NVIM_ARANGO_HOST`, port, scheme, and credential variables. This avoids unexpected network requests during command completion and health checks.
 
-## Environment variables
+## Connections and credentials
 
-You can use environment variables instead of explicit `connections`:
+Connections use this form:
 
-- `NVIM_ARANGO_HOST`
-- `NVIM_ARANGO_PORT`
-- `NVIM_ARANGO_SCHEME`
-- `NVIM_ARANGO_USER`
-- `NVIM_ARANGO_PASSWORD`
-- `NVIM_ARANGO_SYSTEM_URL`
-- `NVIM_ARANGO_<DATABASE>_URL`
-
-Example:
-
-```bash
-export NVIM_ARANGO_USER=root
-export NVIM_ARANGO_PASSWORD=root
-export NVIM_ARANGO_SCHEME=https
-export NVIM_ARANGO_HOST=db.example.com
-export NVIM_ARANGO_PORT=8529
-export NVIM_ARANGO_KORE_URL='https://root:root@db.example.com:8529/kore'
+```text
+http[s]://[user:password@]host[:port]/database
 ```
 
-## Commands
+Authentication is optional, percent-encoded credentials are supported, and IPv6 addresses must use brackets:
 
-- `:ArangoBrowse` - pick a database, then open the collections picker
-- `:ArangoBrowse {database}` - open the collections picker for a specific database
-- `:ArangoResume` - reopen the current browser picker
-- `:ArangoBack` - return to the previous ArangoDB picker or document view
-- `:ArangoDocumentSave` - buffer-local command that saves the current document buffer, or creates a draft document on first save
-- `:ArangoDocumentDuplicate` - buffer-local command that duplicates the current document buffer into a new draft with a fresh id
-- `:ArangoDocumentDelete` - buffer-local command that deletes the current document buffer, or discards a draft document
-- `:ArangoDocumentRelated` - buffer-local command that opens a related document from direct keys, nested relations, or reverse links in the current buffer
+```lua
+connections = {
+  no_auth = "http://127.0.0.1:8529/example",
+  encoded = "https://user%40example.com:p%40ssword@db.example.com:8529/example",
+  ipv6 = "http://[::1]:8529/example",
+}
+```
 
-## Picker actions
+Avoid committing credentials. Every `NVIM_ARANGO_<NAME>_URL` value is detected automatically, and its database name is read from the URL:
 
-- Collections picker defaults: `Enter` open collection, `Ctrl-a` create a draft document, `Ctrl-n` create a collection, `Ctrl-d` duplicate a collection, `Ctrl-r` rename a collection, `Ctrl-t` truncate a collection, `Ctrl-x` open the actions menu, `Ctrl-b` go back to the database picker when available
-- Documents picker defaults: `Ctrl-a` create a draft document in the current collection, `Ctrl-y` duplicate the selected document into a new draft with a fresh id, `Ctrl-d` delete the selected document, `Ctrl-t` truncate the current collection after confirmation, `Ctrl-x` open the actions menu for the current document listing, `Ctrl-f` change filter field, `Ctrl-u` reset search, `Ctrl-o` open related, `Ctrl-p` previous page, `Ctrl-n` next page, `Ctrl-b` go back
+```bash
+export NVIM_ARANGO_WORK_URL='https://reader:secret@db.example.com:8529/work'
+```
+
+The following variables configure server-wide discovery when `auto_discover = true`, and are also used to build a connection for `:ArangoBrowse {database}`:
+
+- `NVIM_ARANGO_HOST` (default `127.0.0.1`)
+- `NVIM_ARANGO_PORT` (default `8529`)
+- `NVIM_ARANGO_SCHEME` (`http`, `https`, `ssl`, or `tls`)
+- `NVIM_ARANGO_USER` (default `root`)
+- `NVIM_ARANGO_PASSWORD` (default `root`)
+- `NVIM_ARANGO_SYSTEM_URL`
+
+For private certificate authorities, set `tls_ca_file`. Disabling `tls_verify` is supported but not recommended.
+
+## Usage
+
+```vim
+:ArangoBrowse
+:ArangoBrowse my_database
+:ArangoResume
+:ArangoBack
+```
+
+Inside a document buffer:
+
+```vim
+:write
+:ArangoDocumentSave
+:ArangoDocumentDuplicate
+:ArangoDocumentDelete
+:ArangoDocumentRelated
+```
+
+Default collection-picker actions:
+
+| Key | Action |
+| --- | --- |
+| `<Enter>` | Open the selected collection |
+| `<C-a>` | Create a draft document |
+| `<C-n>` | Create a collection |
+| `<C-d>` | Duplicate the selected collection |
+| `<C-r>` | Rename the selected collection |
+| `<C-t>` | Truncate the selected collection |
+| `<C-x>` | Open the actions menu |
+| `<C-b>` | Return to database selection when available |
+
+Default document-picker actions:
+
+| Key | Action |
+| --- | --- |
+| `<Enter>` | Open the selected document |
+| `<C-a>` | Create a draft document |
+| `<C-y>` | Duplicate the selected document as a draft |
+| `<C-d>` | Delete the selected document |
+| `<C-o>` | Browse inferred relations |
+| `<C-f>` | Change the search field |
+| `<C-u>` | Reset the search |
+| `<C-p>` / `<C-n>` | Previous / next page |
+| `<C-t>` | Truncate the collection |
+| `<C-x>` | Open the actions menu |
+| `<C-b>` | Go back |
+
+Destructive operations request confirmation. Renaming or truncating a collection is refused while a matching ArangoDB buffer has unsaved changes.
 
 ## Lua API
 
 ```lua
 require("arangodb").setup(opts)
-require("arangodb").browse({ database = "kore" })
+require("arangodb").browse({ database = "work" })
 require("arangodb").resume()
 require("arangodb").back()
 ```
 
-## Healthcheck
+## Health check
 
-Run:
+Run `:checkhealth arangodb` to inspect Neovim compatibility, transports, TLS settings, `snacks.nvim`, and detected database candidates. Passwords are never printed.
 
-```vim
-:checkhealth arangodb
+## Limitations
+
+- Requests are synchronous, so very slow servers can block the editor until `http_timeout` expires.
+- HTTPS currently requires the external `curl` executable.
+- Related-document navigation is heuristic: it recognizes `_id`, `_key`, `*_id`, `*_key`, plural variants, nested relation objects, and reverse fields sampled from other collections.
+- Collection duplication copies documents and the collection type, but not indexes, schemas, computed values, or other collection properties.
+
+## Development
+
+The test suite has no Lua runtime dependencies beyond Neovim:
+
+```bash
+make test
+make lint       # StyLua 2.5.2 plus tests
+make docs       # regenerate help tags
 ```
 
-It checks the HTTP transport setup, optional HTTPS support through `curl`, `snacks.nvim`, and detected database candidates.
+An optional integration test needs a disposable database because it performs destructive collection operations (it also attempts to clean up):
 
-## Notes
+```bash
+ARANGODB_TEST_URL=http://127.0.0.1:8529/_system make integration
+```
 
-- This plugin currently relies on `folke/snacks.nvim` for the live picker UI.
-- Use `http://` for plain connections or `https://` for TLS-enabled instances.
-- Install `curl` to use `https://` connections.
-- Connection strings may contain credentials, so prefer environment variables if you do not want them stored in your config.
-- Add a license before making the repository fully public for reuse.
+Issues and pull requests are welcome. Please include your Neovim, `snacks.nvim`, and ArangoDB versions, a minimal configuration with credentials removed, and the smallest reproducible sequence of actions. See [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [SECURITY.md](SECURITY.md) for private vulnerability reports.
+
+## License
+
+[MIT](LICENSE) © Remi Leuci and contributors.

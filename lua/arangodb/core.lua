@@ -73,7 +73,6 @@ function M.https_transport_available()
   return vim.fn.executable("curl") == 1
 end
 
-
 --- Summarize the available HTTP transports for health reporting.
 function M.transport_display()
   if M.https_transport_available() then
@@ -91,16 +90,30 @@ function M.arango_url(database)
   end
 
   local scheme = M.default_transport_scheme()
+  local host = M.env("NVIM_ARANGO_HOST", "127.0.0.1")
+  if host:find(":", 1, true) and not host:match("^%[.*%]$") then
+    host = "[" .. host .. "]"
+  end
 
   return string.format(
     "%s://%s:%s@%s:%s/%s",
     scheme,
     M.url_encode(M.env("NVIM_ARANGO_USER", "root")),
     M.url_encode(M.env("NVIM_ARANGO_PASSWORD", "root")),
-    M.env("NVIM_ARANGO_HOST", "127.0.0.1"),
+    host,
     M.env("NVIM_ARANGO_PORT", "8529"),
     M.url_encode(database)
   )
+end
+
+local function split_authority(authority)
+  local bracketed_host, bracketed_port = authority:match("^%[([^%]]+)%]:?(%d*)$")
+  if bracketed_host then
+    return bracketed_host, bracketed_port
+  end
+
+  local host, port = authority:match("^([^:]+):?(%d*)$")
+  return host, port
 end
 
 --- Parse a connection URL into the fields used by the HTTP client.
@@ -115,32 +128,40 @@ function M.parse_connection(url)
     return nil
   end
 
-  local userinfo, host_path = remainder:match("^([^@]+)@(.+)$")
-  if not userinfo then
-    return nil
+  local userinfo, host_path = remainder:match("^(.*)@([^@]+)$")
+  if not host_path then
+    host_path = remainder
   end
 
-  local user, password = userinfo:match("^([^:]+):?(.*)$")
-  if not user or user == "" then
-    return nil
+  local user, password
+  if userinfo then
+    user, password = userinfo:match("^([^:]*):?(.*)$")
+    if not user then
+      return nil
+    end
   end
 
-  local authority, database = host_path:match("^([^/]+)/(.+)$")
+  local authority, database = host_path:match("^([^/]+)/([^/?#]+)/?$")
   if not authority or database == "" then
     return nil
   end
 
-  local host, port = authority:match("^([^:]+):?(%d*)$")
+  local host, port = split_authority(authority)
   if not host or host == "" then
+    return nil
+  end
+
+  local port_number = port ~= "" and tonumber(port) or 8529
+  if not port_number or port_number < 1 or port_number > 65535 then
     return nil
   end
 
   return {
     scheme = scheme,
-    user = M.url_decode(user),
-    password = M.url_decode(password),
+    user = user and M.url_decode(user) or nil,
+    password = password and M.url_decode(password) or nil,
     host = host,
-    port = port ~= "" and port or "8529",
+    port = port_number,
     database = M.url_decode(database),
   }
 end
@@ -202,22 +223,28 @@ local function configured_connections()
   collect_connections(options.connections, items, seen)
   collect_connections(vim.g.arangodb_connections, items, seen)
 
+  for name, url in pairs(vim.fn.environ()) do
+    if type(url) == "string" and url ~= "" and name:match("^NVIM_ARANGO_.+_URL$") then
+      local connection = M.parse_connection(url)
+      if connection then
+        add_connection(items, seen, connection.database, url)
+      end
+    end
+  end
+
   return items, seen
 end
 
 --- Discover databases from the default server connection, falling back to _system.
 function M.discover_databases()
   local fallback = { "_system" }
+  local system_connection = M.parse_connection(M.arango_url("_system"))
+  if not system_connection then
+    return fallback
+  end
 
   local ok, output = pcall(function()
-    return require("arangodb.client").list_databases({
-      scheme = M.default_transport_scheme(),
-      host = M.env("NVIM_ARANGO_HOST", "127.0.0.1"),
-      port = M.env("NVIM_ARANGO_PORT", "8529"),
-      user = M.env("NVIM_ARANGO_USER", "root"),
-      password = M.env("NVIM_ARANGO_PASSWORD", "root"),
-      database = "_system",
-    })
+    return require("arangodb.client").list_databases(system_connection)
   end)
   if not ok then
     return fallback
@@ -239,8 +266,10 @@ end
 function M.available_databases()
   local items, seen = configured_connections()
 
-  for _, database in ipairs(M.discover_databases()) do
-    add_connection(items, seen, database, M.arango_url(database))
+  if plugin_config().auto_discover then
+    for _, database in ipairs(M.discover_databases()) do
+      add_connection(items, seen, database, M.arango_url(database))
+    end
   end
 
   table.sort(items, function(a, b)

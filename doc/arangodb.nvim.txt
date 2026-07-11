@@ -1,190 +1,288 @@
-*arangodb.nvim.txt*  Browse and edit ArangoDB from Neovim
+*arangodb.nvim.txt*           Browse and edit ArangoDB data from Neovim
 
 ===============================================================================
 CONTENTS                                                *arangodb.nvim-contents*
 
 1. Introduction ........................................ |arangodb.nvim-intro|
 2. Requirements ........................................ |arangodb.nvim-requirements|
-3. Setup ............................................... |arangodb.nvim-setup|
-4. Commands ............................................ |arangodb.nvim-commands|
-5. Health .............................................. |arangodb.nvim-health|
+3. Installation ........................................ |arangodb.nvim-installation|
+4. Configuration ....................................... |arangodb.nvim-configuration|
+5. Connections ......................................... |arangodb.nvim-connections|
+6. Commands ............................................ |arangodb.nvim-commands|
+7. Picker mappings ..................................... |arangodb.nvim-mappings|
+8. Lua API ............................................. |arangodb.nvim-api|
+9. Health check ........................................ |arangodb.nvim-health|
+10. Development and limitations ........................ |arangodb.nvim-development|
 
 ===============================================================================
 INTRODUCTION                                              *arangodb.nvim-intro*
 
-arangodb.nvim turns an ArangoDB workflow into a reusable Neovim plugin.
+arangodb.nvim provides a picker-based interface for ArangoDB. It can:
 
-Main features:
+- browse databases, collections, and paginated documents
+- search sampled document fields
+- edit JSON documents and save them with |:write|
+- create and duplicate draft documents
+- create, duplicate, rename, and truncate collections
+- infer direct, nested, and reverse document relations
+- connect through HTTP or HTTPS
 
-- browse databases and collections
-- manage collections from a dedicated picker
-- search documents with a live picker
-- open JSON documents in regular buffers
-- create draft documents and insert them on first save
-- duplicate documents into drafts, then save them as new documents
-- create, duplicate, rename, truncate, save, and delete from Neovim
-- jump to related documents from direct foreign keys, relation objects, and reverse links
+The interface uses snacks.nvim. HTTP uses a built-in libuv transport, while
+HTTPS uses curl.
 
 ===============================================================================
 REQUIREMENTS                                      *arangodb.nvim-requirements*
 
-- Neovim >= 0.9
-- folke/snacks.nvim
-- curl for `https://` connections
-
-The plugin uses a built-in Lua HTTP client for `http://`.
-`https://` connections are supported through `curl`.
+- Neovim >= 0.10
+- folke/snacks.nvim with its picker enabled (v2.31.0 is tested in CI)
+- curl for https:// connections
+- an ArangoDB server reachable through its HTTP API (3.12 is tested)
 
 ===============================================================================
-SETUP                                                    *arangodb.nvim-setup*
+INSTALLATION                                      *arangodb.nvim-installation*
 
-Example with lazy.nvim:
+Example for lazy.nvim:
 
 >lua
   {
     "LeuciRemi/arangodb.nvim",
     dependencies = {
-      "folke/snacks.nvim",
+      { "folke/snacks.nvim", opts = { picker = { enabled = true } } },
     },
-    config = function()
-      require("arangodb").setup({
-        connections = {
-          _system = "http://root:root@127.0.0.1:8529/_system",
-        },
-        default_database = "_system",
-        keymaps = {
-          browse = "<leader>ea",
-          resume = "<leader>eA",
-          back = "<leader>eb",
-        },
-        picker_keymaps = {
-          execute = "<C-x>",
-          create = "<C-a>",
-          next_page = "<C-n>",
-          prev_page = "<C-p>",
-          back = "<C-b>",
-          change_field = "<C-f>",
-          reset = "<C-u>",
-          related = "<C-o>",
-          delete = "<C-d>",
-          duplicate = "<C-y>",
-          truncate = "<C-t>",
-          rename = "<C-r>",
-        },
-        layout = {
-          preset = "auto",
-          preview = true,
-        },
-      })
-    end,
+    opts = {
+      connections = {
+        local_db = "http://root:password@127.0.0.1:8529/my_database",
+      },
+      default_database = "local_db",
+    },
   }
 <
 
-Supported options:
+===============================================================================
+CONFIGURATION          *arangodb.nvim-configuration* *arangodb.nvim-setup*
 
-- `connections`
-- `default_database`
-- `keymaps`
-- `picker_keymaps`
-- `layout`
-- `document_keymaps`
-- `field_sample_size`
-- `page_size`
-- `json_indent`
-- `truncate_length`
-- `max_field_depth`
-- `aql_batch_size`
-- `default_sort`
-- `show_system_collections`
-- `http_timeout`
-- `tls_verify`
-- `tls_ca_file`
+Call setup() once after installing the plugin:
 
-`keymaps` supports `browse`, `resume`, and `back`.
+>lua
+  require("arangodb").setup({
+    connections = nil,
+    default_database = nil,
+    auto_discover = false,
 
-`picker_keymaps` supports `execute`, `create`, `next_page`, `prev_page`,
-`back`, `change_field`, `reset`, `related`, `delete`, `duplicate`,
-`truncate`, and `rename`.
+    keymaps = {
+      browse = nil,
+      resume = nil,
+      back = nil,
+    },
+    picker_keymaps = {
+      execute = "<C-x>",
+      create = "<C-a>",
+      create_collection = "<C-n>",
+      duplicate_collection = "<C-d>",
+      next_page = "<C-n>",
+      prev_page = "<C-p>",
+      back = "<C-b>",
+      change_field = "<C-f>",
+      reset = "<C-u>",
+      related = "<C-o>",
+      delete = "<C-d>",
+      duplicate = "<C-y>",
+      truncate = "<C-t>",
+      rename = "<C-r>",
+    },
+    document_keymaps = {
+      save = nil,
+      delete = nil,
+      duplicate = nil,
+      related = nil,
+    },
 
-`layout` supports `preset` and `preview`. `preset = "auto"` uses a
-side-by-side list/preview layout on wide screens and a stacked layout on
-narrower screens.
+    layout = { preset = "auto", preview = true },
+    field_sample_size = 200,
+    page_size = 50,
+    json_indent = 2,
+    truncate_length = 120,
+    max_field_depth = 4,
+    aql_batch_size = 1000,
+    default_sort = "doc._key ASC",
+    show_system_collections = false,
+    http_timeout = 30000,
+    tls_verify = true,
+    tls_ca_file = nil,
+  })
+<
 
-`document_keymaps` supports `save`, `delete`, `duplicate`, and `related`.
+                                                        *arangodb.nvim-options*
 
-Environment variables:
+connections ~
+    Named connection URLs. Accepts { name = url } or a list of
+    { name = "...", url = "..." } entries.
 
-- `NVIM_ARANGO_HOST`
-- `NVIM_ARANGO_PORT`
-- `NVIM_ARANGO_SCHEME`
-- `NVIM_ARANGO_USER`
-- `NVIM_ARANGO_PASSWORD`
-- `NVIM_ARANGO_SYSTEM_URL`
-- `NVIM_ARANGO_<DATABASE>_URL`
+default_database ~
+    Preferred connection name. May also be a { name, url } table.
+
+auto_discover ~
+    Query /_api/database/user using the NVIM_ARANGO_HOST settings. Disabled by
+    default to prevent implicit network requests during completion and health
+    checks.
+
+keymaps ~
+    Optional global normal-mode mappings for browse, resume, and back. They are
+    unset by default.
+
+picker_keymaps ~
+    Picker-local mappings. Any value may be false to disable that mapping.
+
+document_keymaps ~
+    Buffer-local mappings for save, delete, duplicate, and related. They are
+    unset by default. The corresponding commands are always created.
+
+layout ~
+    snacks.nvim picker layout. preset = "auto" uses a side-by-side layout on
+    wide screens and a stacked layout on smaller screens. preview controls the
+    preview window.
+
+field_sample_size ~
+    Documents sampled when discovering filter and reverse-relation fields.
+
+page_size ~
+    Documents displayed per picker page.
+
+json_indent ~
+    Spaces used to format JSON buffers and previews.
+
+truncate_length ~
+    Maximum displayed field length in picker rows.
+
+max_field_depth ~
+    Maximum recursion depth for nested field discovery.
+
+aql_batch_size ~
+    Cursor batch size used while consuming AQL responses.
+
+default_sort ~
+    AQL sort expression used by document and relation listings.
+
+show_system_collections ~
+    Include system collections in the collection picker.
+
+http_timeout ~
+    HTTP request timeout in milliseconds.
+
+tls_verify ~
+    Verify HTTPS certificates. Disabling this is not recommended.
+
+tls_ca_file ~
+    Optional CA bundle passed to curl with --cacert.
+
+===============================================================================
+CONNECTIONS                                          *arangodb.nvim-connections*
+
+Connection URLs have this form:
+
+  http[s]://[user:password@]host[:port]/database
+
+Authentication is optional. Credentials may be percent-encoded. IPv6 hosts
+must use brackets, for example:
+
+>lua
+  connections = {
+    no_auth = "http://127.0.0.1:8529/example",
+    encoded = "https://user%40example.com:p%40ssword@db.example.com:8529/example",
+    ipv6 = "http://[::1]:8529/example",
+  }
+<
+
+Avoid storing credentials in version-controlled configuration. Every
+NVIM_ARANGO_<NAME>_URL environment variable is detected automatically. The
+database name is read from the URL.
+
+Server-wide discovery uses these variables when auto_discover is true:
+
+- NVIM_ARANGO_HOST (default 127.0.0.1)
+- NVIM_ARANGO_PORT (default 8529)
+- NVIM_ARANGO_SCHEME (http, https, ssl, or tls)
+- NVIM_ARANGO_USER (default root)
+- NVIM_ARANGO_PASSWORD (default root)
+- NVIM_ARANGO_SYSTEM_URL
 
 ===============================================================================
 COMMANDS                                              *arangodb.nvim-commands*
 
                                                         *:ArangoBrowse*
 :ArangoBrowse [database]
-    Open the ArangoDB browser. When a database is passed, skip the database
-    picker and open the collections picker for that database directly.
-
-    Default collection picker actions:
-    - <Enter> opens the selected collection
-    - <C-a> opens a draft document buffer for the selected collection
-    - <C-n> creates a collection
-    - <C-d> duplicates the selected collection into `<name>_clone` by default
-    - <C-r> renames the selected collection
-    - <C-t> truncates the selected collection
-    - <C-x> opens the collection actions menu
-    - <C-b> returns to the database picker when the current view came from it
-
-    Default document picker actions:
-    - <C-a> opens a new draft document in the current collection
-    - <C-y> duplicates the selected document into a draft with a fresh id
-    - <C-d> deletes the selected document
-    - <C-t> truncates the current collection after confirmation
-    - <C-x> opens the actions menu for the current document listing
-    - <C-f> changes the active filter field
-    - <C-u> resets the current search
-    - <C-o> opens related documents
-    - <C-p> goes to the previous page
-    - <C-n> goes to the next page
-    - <C-b> returns to the previous picker route
+    Open the database and collection browser. A database argument skips the
+    database picker.
 
                                                         *:ArangoResume*
 :ArangoResume
-    Reopen the last picker if it still exists.
+    Re-show the active picker, or start the browser if no picker is active.
 
                                                          *:ArangoBack*
 :ArangoBack
-    Return to the previous ArangoDB picker or document view.
+    Return to the previous picker or document route.
 
                                                 *:ArangoDocumentSave*
 :ArangoDocumentSave
-    Buffer-local command that saves the current ArangoDB document buffer. Draft
-    buffers are inserted into ArangoDB on their first save.
+    Save the current document. A draft is inserted on its first save. |:write|
+    performs the same action in an ArangoDB document buffer.
 
                                             *:ArangoDocumentDuplicate*
 :ArangoDocumentDuplicate
-    Buffer-local command that duplicates the current ArangoDB document buffer
-    into a new draft with a fresh id. Saving the duplicate creates a new
-    document.
+    Open a copy of the current document as a draft with a fresh key.
 
                                               *:ArangoDocumentDelete*
 :ArangoDocumentDelete
-    Buffer-local command that deletes the current ArangoDB document buffer. For
-    draft buffers, this discards the draft without sending a delete request.
+    Delete the current document after confirmation, or discard a draft.
 
                                              *:ArangoDocumentRelated*
 :ArangoDocumentRelated
-    Buffer-local command that picks and opens a related document from direct
-    foreign keys, nested relation objects, or reverse links discovered in
-    other collections.
+    Pick a direct, nested, or inferred reverse relation from the document.
 
 ===============================================================================
-HEALTH                                                    *arangodb.nvim-health*
+PICKER MAPPINGS                                      *arangodb.nvim-mappings*
+
+Collection picker defaults:
+
+  <Enter>   open collection
+  <C-a>     create draft document
+  <C-n>     create collection
+  <C-d>     duplicate collection
+  <C-r>     rename collection
+  <C-t>     truncate collection
+  <C-x>     actions menu
+  <C-b>     database picker, when available
+
+Document picker defaults:
+
+  <Enter>   open document
+  <C-a>     create draft document
+  <C-y>     duplicate document as a draft
+  <C-d>     delete document
+  <C-o>     open related document
+  <C-f>     change filter field
+  <C-u>     reset search
+  <C-p>     previous page
+  <C-n>     next page
+  <C-t>     truncate collection
+  <C-x>     actions menu
+  <C-b>     go back
+
+Destructive operations request confirmation. Renaming or truncating is refused
+while a matching ArangoDB buffer has unsaved changes.
+
+===============================================================================
+LUA API                                                    *arangodb.nvim-api*
+
+>lua
+  require("arangodb").setup(opts)
+  require("arangodb").browse({ database = "work" })
+  require("arangodb").resume()
+  require("arangodb").back()
+<
+
+===============================================================================
+HEALTH CHECK                                            *arangodb.nvim-health*
 
 Run:
 
@@ -192,7 +290,34 @@ Run:
   :checkhealth arangodb
 <
 
-The healthcheck verifies the HTTP transport setup, optional HTTPS support
-through `curl`, `snacks.nvim`, and available database candidates.
+The health check reports Neovim compatibility, HTTP and HTTPS transports, TLS
+settings, snacks.nvim availability, and database candidates. It never prints
+passwords.
+
+===============================================================================
+DEVELOPMENT AND LIMITATIONS                        *arangodb.nvim-development*
+
+Developer commands:
+
+>sh
+  make test
+  make lint
+  make docs
+<
+
+Requests are synchronous and may block Neovim until http_timeout expires.
+HTTPS requires curl. Relation detection is heuristic. Collection duplication
+copies documents and collection type, but not indexes, schemas, computed
+values, or other collection properties.
+
+The optional integration suite needs a disposable database and performs
+destructive collection operations:
+
+>sh
+  ARANGODB_TEST_URL=http://127.0.0.1:8529/_system make integration
+<
+
+The project is available under the MIT license. Issues and pull requests are
+welcome at https://github.com/LeuciRemi/arangodb.nvim.
 
 vim:tw=78:ts=8:noet:ft=help:norl:

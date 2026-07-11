@@ -1,0 +1,43 @@
+name: Bug report
+description: Report reproducible incorrect behavior
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping improve arangodb.nvim. Remove all credentials and private data before submitting.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Neovim, snacks.nvim, ArangoDB, and operating system versions.
+      placeholder: Neovim 0.12.4; snacks.nvim 2.31.0; ArangoDB 3.12; macOS
+    validations:
+      required: true
+  - type: textarea
+    id: health
+    attributes:
+      label: Health check
+      description: Paste the output of :checkhealth arangodb with secrets removed.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Minimal configuration
+      description: Replace credentials and private hostnames before pasting.
+      render: lua
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: List the smallest sequence that reproduces the problem and the expected result.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Additional logs or context

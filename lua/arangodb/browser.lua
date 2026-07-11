@@ -428,7 +428,8 @@ local function title(database, collection, field, meta)
   local keymaps = picker_options()
   local hint = hint_text({
     key_label(keymaps.execute) and (keymaps.execute .. " actions") or nil,
-    key_label(keymaps.prev_page) and key_label(keymaps.next_page)
+    key_label(keymaps.prev_page)
+        and key_label(keymaps.next_page)
         and string.format("%s/%s pages", keymaps.prev_page, keymaps.next_page)
       or nil,
     #state.history > 0 and key_label(keymaps.back) and (keymaps.back .. " back") or nil,
@@ -668,9 +669,8 @@ local function arangodb_document_buffers(opts)
 
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
     local is_draft = vim.b[buf].arangodb_document_is_new == true
-    local has_document = vim.b[buf].arangodb_document_id ~= nil or (
-      opts.include_drafts ~= false and is_draft and vim.b[buf].arangodb_document_collection ~= nil
-    )
+    local has_document = vim.b[buf].arangodb_document_id ~= nil
+      or (opts.include_drafts ~= false and is_draft and vim.b[buf].arangodb_document_collection ~= nil)
     if vim.api.nvim_buf_is_valid(buf) and has_document then
       local matches = true
       if opts.database and vim.b[buf].arangodb_database ~= opts.database then
@@ -723,19 +723,11 @@ local function close_document_buffers(opts)
 end
 
 local function confirm_delete_document(document_id)
-  return vim.fn.confirm(
-    string.format("Delete document %s?", document_id),
-    "&Delete\n&Cancel",
-    2
-  ) == 1
+  return vim.fn.confirm(string.format("Delete document %s?", document_id), "&Delete\n&Cancel", 2) == 1
 end
 
 local function confirm_truncate_collection(collection, callback, picker)
-  if vim.fn.confirm(
-    string.format("Truncate collection %s?", collection),
-    "&No\n&Yes",
-    1
-  ) ~= 2 then
+  if vim.fn.confirm(string.format("Truncate collection %s?", collection), "&No\n&Yes", 1) ~= 2 then
     restore_picker_input_focus(picker)
     return
   end
@@ -797,10 +789,12 @@ local function create_collection_with_prompt(config, picker, callback)
 end
 
 local function rename_collection_with_prompt(config, collection, callback, picker)
-  if not ensure_unmodified_document_buffers({
-    database = config.database,
-    collection = collection,
-  }, "renaming this collection") then
+  if
+    not ensure_unmodified_document_buffers({
+      database = config.database,
+      collection = collection,
+    }, "renaming this collection")
+  then
     restore_picker_input_focus(picker)
     return
   end
@@ -837,10 +831,12 @@ local function rename_collection_with_prompt(config, collection, callback, picke
 end
 
 local function truncate_collection_with_prompt(config, collection, callback, picker)
-  if not ensure_unmodified_document_buffers({
-    database = config.database,
-    collection = collection,
-  }, "truncating this collection") then
+  if
+    not ensure_unmodified_document_buffers({
+      database = config.database,
+      collection = collection,
+    }, "truncating this collection")
+  then
     restore_picker_input_focus(picker)
     return
   end
@@ -867,10 +863,12 @@ local function truncate_collection_with_prompt(config, collection, callback, pic
 end
 
 local function duplicate_collection_with_prompt(config, collection, callback, picker)
-  if not ensure_unmodified_document_buffers({
-    database = config.database,
-    collection = collection,
-  }, "duplicating this collection") then
+  if
+    not ensure_unmodified_document_buffers({
+      database = config.database,
+      collection = collection,
+    }, "duplicating this collection")
+  then
     restore_picker_input_focus(picker)
     return
   end
@@ -952,12 +950,17 @@ end
 
 local function set_buffer_json(buf, text)
   local win = vim.fn.bufwinid(buf)
-  local view = win ~= -1 and vim.fn.winsaveview() or nil
+  local view
+  if win ~= -1 and vim.api.nvim_win_is_valid(win) then
+    view = vim.api.nvim_win_call(win, vim.fn.winsaveview)
+  end
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(text, "\n", { plain = true }))
   vim.bo[buf].modified = false
   if view then
-    pcall(vim.fn.winrestview, view)
+    pcall(vim.api.nvim_win_call, win, function()
+      vim.fn.winrestview(view)
+    end)
   end
 end
 
@@ -972,10 +975,12 @@ local function get_current_document_payload(buf)
 end
 
 refresh_collection_document_buffers = function(config, old_collection, new_collection)
-  for _, buf in ipairs(arangodb_document_buffers({
-    database = config.database,
-    collection = old_collection,
-  })) do
+  for _, buf in
+    ipairs(arangodb_document_buffers({
+      database = config.database,
+      collection = old_collection,
+    }))
+  do
     if vim.b[buf].arangodb_document_is_new == true then
       local ok, payload = pcall(get_current_document_payload, buf)
       local key = ok and vim.trim(payload._key or "") or nil
@@ -998,11 +1003,14 @@ refresh_collection_document_buffers = function(config, old_collection, new_colle
       if key then
         local payload = try_json(config, "ArangoDB Rename Collection", "get", { "--id", new_collection .. "/" .. key })
         if payload then
-          M.open_document(config, vim.tbl_extend("force", payload, {
-            database = config.database,
-            buf = buf,
-            show = false,
-          }))
+          M.open_document(
+            config,
+            vim.tbl_extend("force", payload, {
+              database = config.database,
+              buf = buf,
+              show = false,
+            })
+          )
         end
       end
     end
@@ -1441,7 +1449,8 @@ local function reverse_related_values(config, document, collections)
       end
 
       if #matched_fields > 0 then
-        local result = try_call("ArangoDB", client.search_related, config, matched_fields, relation_values, 2, collection_name)
+        local result =
+          try_call("ArangoDB", client.search_related, config, matched_fields, relation_values, 2, collection_name)
         if result and result.matches and #result.matches > 0 then
           local display = result.matches[1].id or collection_name
           local fields_label = table.concat(matched_fields, ", ")
@@ -1494,14 +1503,14 @@ local function relation_browse_route(config, relation)
   end
 
   return {
-      kind = "related",
-      config = config,
-      collection = relation.collection,
-      field = relation.field,
-      values = related_search_values(relation),
-      search = "",
-      prompt = relation_prompt_label(relation),
-      title = relation.label,
+    kind = "related",
+    config = config,
+    collection = relation.collection,
+    field = relation.field,
+    values = related_search_values(relation),
+    search = "",
+    prompt = relation_prompt_label(relation),
+    title = relation.label,
   }
 end
 
@@ -1558,7 +1567,17 @@ local function open_route(route, prev_picker)
 end
 
 local function related_browse_payload(opts)
-  return try_call("ArangoDB", client.browse_related_collection, opts.config, opts.collection, opts.field, opts.values, opts.search, opts.offset, opts.limit)
+  return try_call(
+    "ArangoDB",
+    client.browse_related_collection,
+    opts.config,
+    opts.collection,
+    opts.field,
+    opts.values,
+    opts.search,
+    opts.offset,
+    opts.limit
+  )
 end
 
 --- Reopen the previous ArangoDB route from the shared history stack.
@@ -1691,7 +1710,9 @@ local function document_actions(config, buf)
       return
     end
 
-    if not ensure_unmodified_document_buffers({ id = document_id, include_drafts = false }, "deleting this document") then
+    if
+      not ensure_unmodified_document_buffers({ id = document_id, include_drafts = false }, "deleting this document")
+    then
       return
     end
 
@@ -1776,10 +1797,14 @@ function M.open_document(config, doc)
   preview = preview or "{}"
 
   vim.fn.bufload(buf)
-  pcall(vim.api.nvim_buf_set_name, buf, document_buffer_name({
-    database = database,
-    id = display_id,
-  }))
+  pcall(
+    vim.api.nvim_buf_set_name,
+    buf,
+    document_buffer_name({
+      database = database,
+      id = display_id,
+    })
+  )
   set_buffer_json(buf, preview)
 
   vim.bo[buf].filetype = "json"
@@ -1800,7 +1825,10 @@ function M.open_document(config, doc)
   vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
   vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, {
     virt_text = {
-      { string.format(" ArangoDB%s %s/%s ", is_new and " draft" or "", vim.b[buf].arangodb_database, display_id), "Title" },
+      {
+        string.format(" ArangoDB%s %s/%s ", is_new and " draft" or "", vim.b[buf].arangodb_database, display_id),
+        "Title",
+      },
       {
         is_new and "  :ArangoDocumentSave  :ArangoDocumentDuplicate  :ArangoDocumentDelete"
           or "  :ArangoDocumentSave  :ArangoDocumentDuplicate  :ArangoDocumentDelete  :ArangoDocumentRelated",
@@ -1822,28 +1850,34 @@ end
 open_new_document = function(config, collection, opts)
   local key = generate_uuid()
   local payload = draft_document_payload(collection, key)
-  M.open_document(config, vim.tbl_extend("force", {
-    database = config.database,
-    id = payload._id,
-    key = key,
-    collection = collection,
-    document = payload,
-    preview = draft_document_preview(collection, key),
-    is_new = true,
-  }, opts or {}))
+  M.open_document(
+    config,
+    vim.tbl_extend("force", {
+      database = config.database,
+      id = payload._id,
+      key = key,
+      collection = collection,
+      document = payload,
+      preview = draft_document_preview(collection, key),
+      is_new = true,
+    }, opts or {})
+  )
 end
 
 open_duplicate_document = function(config, collection, document, opts)
   local payload, key, target_collection = duplicated_document_payload(collection, document)
-  M.open_document(config, vim.tbl_extend("force", {
-    database = config.database,
-    id = payload._id,
-    key = key,
-    collection = target_collection,
-    document = payload,
-    preview = utils.json_pretty(payload),
-    is_new = true,
-  }, opts or {}))
+  M.open_document(
+    config,
+    vim.tbl_extend("force", {
+      database = config.database,
+      id = payload._id,
+      key = key,
+      collection = target_collection,
+      document = payload,
+      preview = utils.json_pretty(payload),
+      is_new = true,
+    }, opts or {})
+  )
 end
 
 local function item_text(item)
@@ -1982,11 +2016,19 @@ browse_collections = function(config, opts, prev_picker)
 
     if collection then
       choices[#choices + 1] = { label = "Open collection (Enter)", action = "arango_open_collection" }
-      choices[#choices + 1] = { label = action_label("Duplicate collection", keymaps.delete), action = "arango_duplicate_collection" }
-      choices[#choices + 1] = { label = action_label("Rename collection", keymaps.rename), action = "arango_rename_collection" }
-      choices[#choices + 1] = { label = action_label("Truncate collection", keymaps.truncate), action = "arango_truncate_collection" }
+      choices[#choices + 1] = {
+        label = action_label("Duplicate collection", keymaps.duplicate_collection),
+        action = "arango_duplicate_collection",
+      }
+      choices[#choices + 1] =
+        { label = action_label("Rename collection", keymaps.rename), action = "arango_rename_collection" }
+      choices[#choices + 1] =
+        { label = action_label("Truncate collection", keymaps.truncate), action = "arango_truncate_collection" }
     end
-    choices[#choices + 1] = { label = action_label("Create collection", keymaps.next_page), action = "arango_create_collection" }
+    choices[#choices + 1] = {
+      label = action_label("Create collection", keymaps.create_collection),
+      action = "arango_create_collection",
+    }
     if opts.allow_database_back then
       choices[#choices + 1] = { label = action_label("Choose database", keymaps.back), action = "arango_pick_database" }
     end
@@ -2092,7 +2134,12 @@ browse_collections = function(config, opts, prev_picker)
           set_picker_search(current, new_name)
           refresh_picker(current)
           vim.notify(
-            string.format("Collection %s duplicated to %s (%d documents)", collection, new_name, result.copied_count or 0),
+            string.format(
+              "Collection %s duplicated to %s (%d documents)",
+              collection,
+              new_name,
+              result.copied_count or 0
+            ),
             vim.log.levels.INFO
           )
         end, current)
@@ -2136,8 +2183,8 @@ browse_collections = function(config, opts, prev_picker)
         keys = merge_keymaps(
           picker_key(keymaps.execute, "arango_action_menu", { "n", "i" }, "Actions"),
           picker_key(keymaps.create, "arango_create_document", { "n", "i" }, "Create Document"),
-          picker_key(keymaps.next_page, "arango_create_collection", { "n", "i" }, "Create Collection"),
-          picker_key(keymaps.delete, "arango_duplicate_collection", { "n", "i" }, "Duplicate Collection"),
+          picker_key(keymaps.create_collection, "arango_create_collection", { "n", "i" }, "Create Collection"),
+          picker_key(keymaps.duplicate_collection, "arango_duplicate_collection", { "n", "i" }, "Duplicate Collection"),
           picker_key(keymaps.rename, "arango_rename_collection", { "n", "i" }, "Rename Collection"),
           picker_key(keymaps.truncate, "arango_truncate_collection", { "n", "i" }, "Truncate Collection"),
           picker_key(keymaps.back, "arango_pick_database", { "n", "i" }, "Choose Database", opts.allow_database_back)
@@ -2147,8 +2194,8 @@ browse_collections = function(config, opts, prev_picker)
         keys = merge_keymaps(
           picker_key(keymaps.execute, "arango_action_menu", { "n" }, "Actions"),
           picker_key(keymaps.create, "arango_create_document", { "n" }, "Create Document"),
-          picker_key(keymaps.next_page, "arango_create_collection", { "n" }, "Create Collection"),
-          picker_key(keymaps.delete, "arango_duplicate_collection", { "n" }, "Duplicate Collection"),
+          picker_key(keymaps.create_collection, "arango_create_collection", { "n" }, "Create Collection"),
+          picker_key(keymaps.duplicate_collection, "arango_duplicate_collection", { "n" }, "Duplicate Collection"),
           picker_key(keymaps.rename, "arango_rename_collection", { "n" }, "Rename Collection"),
           picker_key(keymaps.truncate, "arango_truncate_collection", { "n" }, "Truncate Collection"),
           picker_key(keymaps.back, "arango_pick_database", { "n" }, "Choose Database", opts.allow_database_back)
@@ -2225,15 +2272,20 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
 
     if selected and selected.item then
       choices[#choices + 1] = { label = "Open document (Enter)", action = "arango_open_document" }
-      choices[#choices + 1] = { label = action_label("Duplicate document", keymaps.duplicate), action = "arango_duplicate_document" }
+      choices[#choices + 1] =
+        { label = action_label("Duplicate document", keymaps.duplicate), action = "arango_duplicate_document" }
       choices[#choices + 1] = { label = action_label("Open related", keymaps.related), action = "arango_open_related" }
-      choices[#choices + 1] = { label = action_label("Delete document", keymaps.delete), action = "arango_delete_document" }
+      choices[#choices + 1] =
+        { label = action_label("Delete document", keymaps.delete), action = "arango_delete_document" }
     end
-    choices[#choices + 1] = { label = action_label("Create document", keymaps.create), action = "arango_create_document" }
-    choices[#choices + 1] = { label = action_label("Truncate collection", keymaps.truncate), action = "arango_truncate_collection" }
+    choices[#choices + 1] =
+      { label = action_label("Create document", keymaps.create), action = "arango_create_document" }
+    choices[#choices + 1] =
+      { label = action_label("Truncate collection", keymaps.truncate), action = "arango_truncate_collection" }
 
     if route_kind ~= "related" then
-      choices[#choices + 1] = { label = action_label("Change filter field", keymaps.change_field), action = "arango_change_field" }
+      choices[#choices + 1] =
+        { label = action_label("Change filter field", keymaps.change_field), action = "arango_change_field" }
     end
     if meta.search ~= "" then
       choices[#choices + 1] = { label = action_label("Reset search", keymaps.reset), action = "arango_reset_search" }
@@ -2467,7 +2519,9 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
           return
         end
 
-        if not ensure_unmodified_document_buffers({ id = document_id, include_drafts = false }, "deleting this document") then
+        if
+          not ensure_unmodified_document_buffers({ id = document_id, include_drafts = false }, "deleting this document")
+        then
           return
         end
 
@@ -2498,7 +2552,13 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
           picker_key(keymaps.duplicate, "arango_duplicate_document", { "n", "i" }, "Duplicate Document"),
           picker_key(keymaps.prev_page, "arango_prev_page", { "n", "i" }, "Previous Page"),
           picker_key(keymaps.next_page, "arango_next_page", { "n", "i" }, "Next Page"),
-          picker_key(keymaps.change_field, "arango_change_field", { "n", "i" }, "Change Filter Field", route_kind ~= "related"),
+          picker_key(
+            keymaps.change_field,
+            "arango_change_field",
+            { "n", "i" },
+            "Change Filter Field",
+            route_kind ~= "related"
+          ),
           picker_key(keymaps.reset, "arango_reset_search", { "n", "i" }, "Reset Search"),
           picker_key(keymaps.related, "arango_open_related", { "n", "i" }, "Open Related"),
           picker_key(keymaps.delete, "arango_delete_document", { "n", "i" }, "Delete Document"),
@@ -2513,7 +2573,13 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
           picker_key(keymaps.duplicate, "arango_duplicate_document", { "n" }, "Duplicate Document"),
           picker_key(keymaps.prev_page, "arango_prev_page", { "n" }, "Previous Page"),
           picker_key(keymaps.next_page, "arango_next_page", { "n" }, "Next Page"),
-          picker_key(keymaps.change_field, "arango_change_field", { "n" }, "Change Filter Field", route_kind ~= "related"),
+          picker_key(
+            keymaps.change_field,
+            "arango_change_field",
+            { "n" },
+            "Change Filter Field",
+            route_kind ~= "related"
+          ),
           picker_key(keymaps.reset, "arango_reset_search", { "n" }, "Reset Search"),
           picker_key(keymaps.related, "arango_open_related", { "n" }, "Open Related"),
           picker_key(keymaps.delete, "arango_delete_document", { "n" }, "Delete Document"),
@@ -2542,10 +2608,11 @@ function M.open(opts)
     opts.pick_database = false
   end
 
-  local db_item = opts.database and (arango.find_database(opts.database) or {
-    name = opts.database,
-    url = arango.arango_url(opts.database),
-  })
+  local db_item = opts.database
+      and (arango.find_database(opts.database) or {
+        name = opts.database,
+        url = arango.arango_url(opts.database),
+      })
     or arango.default_database()
   if not db_item then
     arango.notify_error("No ArangoDB database configured")
