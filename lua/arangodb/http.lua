@@ -2,8 +2,10 @@
 local M = {}
 
 local uv = vim.uv or vim.loop
+local response_parser = require("arangodb.http.response")
 
 local BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local HEADER_NAME_PATTERN = "^[!#$%%&'*+.^_`|~%w-]+$"
 
 local function close_handle(handle)
   if handle and not handle:is_closing() then
@@ -45,110 +47,6 @@ local function encode_base64(data)
   return table.concat(parts)
 end
 
---- Read a single HTTP header or chunk line from a response buffer.
-local function read_line(text, offset)
-  local crlf = text:find("\r\n", offset, true)
-  local lf = text:find("\n", offset, true)
-
-  if crlf and (not lf or crlf < lf) then
-    return text:sub(offset, crlf - 1), crlf + 2
-  end
-  if lf then
-    return text:sub(offset, lf - 1), lf + 1
-  end
-end
-
---- Decode chunked transfer-encoding returned by ArangoDB or curl.
-local function decode_chunked(body)
-  local chunks = {}
-  local offset = 1
-
-  while true do
-    local line, next_offset = read_line(body, offset)
-    if not line then
-      error("Invalid chunked response from ArangoDB")
-    end
-
-    local size_text = line:match("^%s*([0-9A-Fa-f]+)")
-    local size = size_text and tonumber(size_text, 16) or nil
-    if not size then
-      error("Invalid chunk size in ArangoDB response")
-    end
-
-    offset = next_offset
-    if size == 0 then
-      break
-    end
-
-    local chunk = body:sub(offset, offset + size - 1)
-    if #chunk < size then
-      error("Truncated chunked response from ArangoDB")
-    end
-
-    chunks[#chunks + 1] = chunk
-    offset = offset + size
-
-    if body:sub(offset, offset + 1) == "\r\n" then
-      offset = offset + 2
-    elseif body:sub(offset, offset) == "\n" then
-      offset = offset + 1
-    else
-      error("Invalid chunk separator in ArangoDB response")
-    end
-  end
-
-  return table.concat(chunks)
-end
-
---- Parse the raw HTTP response into status, headers, and body fields.
-local function parse_response(raw)
-  local header_end = raw:find("\r\n\r\n", 1, true)
-  local separator_len = 4
-
-  if not header_end then
-    header_end = raw:find("\n\n", 1, true)
-    separator_len = 2
-  end
-
-  if not header_end then
-    error("Invalid HTTP response from ArangoDB")
-  end
-
-  local head = raw:sub(1, header_end - 1)
-  local body = raw:sub(header_end + separator_len)
-  local delimiter = head:find("\r\n", 1, true) and "\r\n" or "\n"
-  local lines = vim.split(head, delimiter, { plain = true, trimempty = false })
-  local status = tonumber((lines[1] or ""):match("^HTTP/%d+%.%d+%s+(%d+)$") or (lines[1] or ""):match("^HTTP/%d+%.%d+%s+(%d+)%s+"))
-
-  if not status then
-    error("Invalid HTTP status line from ArangoDB: " .. (lines[1] or ""))
-  end
-
-  local headers = {}
-  for index = 2, #lines do
-    local name, value = lines[index]:match("^([^:]+):%s*(.*)$")
-    if name then
-      headers[name:lower()] = value
-    end
-  end
-
-  local transfer_encoding = headers["transfer-encoding"]
-  if transfer_encoding and transfer_encoding:lower():find("chunked", 1, true) then
-    body = decode_chunked(body)
-  else
-    local content_length = tonumber(headers["content-length"])
-    if content_length then
-      body = body:sub(1, content_length)
-    end
-  end
-
-  return {
-    status = status,
-    headers = headers,
-    body = body,
-  }
-end
-
 local function normalize_scheme(value)
   local scheme = tostring(value or "http"):lower()
   if scheme ~= "http" and scheme ~= "https" then
@@ -162,12 +60,19 @@ local function build_headers(opts, host, port, body)
   local headers = {}
   for name, value in pairs(opts.headers or {}) do
     if value ~= nil then
+      if type(name) ~= "string" or not name:match(HEADER_NAME_PATTERN) then
+        error("Invalid HTTP header name: " .. tostring(name))
+      end
+      if tostring(value):find("[\r\n]") then
+        error("Invalid HTTP header value for " .. name)
+      end
       headers[name] = tostring(value)
     end
   end
 
   if headers.Host == nil and headers.host == nil then
-    headers.Host = string.format("%s:%d", host, port)
+    local header_host = host:find(":", 1, true) and ("[" .. host .. "]") or host
+    headers.Host = string.format("%s:%d", header_host, port)
   end
   if headers.Accept == nil and headers.accept == nil then
     headers.Accept = "application/json"
@@ -175,7 +80,7 @@ local function build_headers(opts, host, port, body)
   if headers.Connection == nil and headers.connection == nil then
     headers.Connection = "close"
   end
-  if headers.Authorization == nil and headers.authorization == nil then
+  if headers.Authorization == nil and headers.authorization == nil and (opts.user ~= nil or opts.password ~= nil) then
     headers.Authorization = "Basic " .. encode_base64(string.format("%s:%s", opts.user or "", opts.password or ""))
   end
   if body ~= nil then
@@ -223,19 +128,17 @@ end
 
 local function run_command(args, input)
   if vim.system then
-    local result = vim.system(args, {
-      stdin = input,
-      text = true,
-    }):wait()
-    local output = result.stdout or ""
-    if result.stderr and result.stderr ~= "" then
-      output = output .. result.stderr
-    end
-    return output, result.code or 0
+    local result = vim
+      .system(args, {
+        stdin = input,
+        text = true,
+      })
+      :wait()
+    return result.stdout or "", result.stderr or "", result.code or 0
   end
 
   local output = vim.fn.system(args, input or "")
-  return output, vim.v.shell_error
+  return output, "", vim.v.shell_error
 end
 
 --- Shell out to curl for HTTPS requests and parse its full response output.
@@ -253,11 +156,10 @@ local function curl_request(opts, scheme, host, port, method, path, headers, bod
     "curl",
     "--silent",
     "--show-error",
-    "--stderr",
-    "-",
     "--globoff",
     "--http1.1",
     "--include",
+    "--suppress-connect-headers",
     "--request",
     method,
     "--connect-timeout",
@@ -286,18 +188,19 @@ local function curl_request(opts, scheme, host, port, method, path, headers, bod
   end
 
   args[#args + 1] = "--url"
-  args[#args + 1] = string.format("%s://%s:%d%s", scheme, host, port, path)
+  local url_host = host:find(":", 1, true) and ("[" .. host .. "]") or host
+  args[#args + 1] = string.format("%s://%s:%d%s", scheme, url_host, port, path)
 
-  local output, code = run_command(args, body)
+  local output, stderr, code = run_command(args, body)
   if code ~= 0 then
-    local message = vim.trim(output or "")
+    local message = vim.trim(stderr ~= "" and stderr or output or "")
     if message == "" then
       message = string.format("curl exited with code %d", code)
     end
     error(message)
   end
 
-  return parse_response(output)
+  return response_parser.parse(output)
 end
 
 --- Execute a request through curl for HTTPS or through libuv TCP for HTTP.
@@ -309,25 +212,34 @@ function M.request(opts)
   end
 
   local host = opts.host
-  if type(host) ~= "string" or host == "" then
+  if type(host) ~= "string" or host == "" or host:find("[\r\n]") then
     error("Missing ArangoDB host")
   end
 
   local port = tonumber(opts.port)
-  if not port then
+  if not port or port < 1 or port > 65535 or port % 1 ~= 0 then
     error("Invalid ArangoDB port: " .. tostring(opts.port))
   end
 
   local method = tostring(opts.method or "GET"):upper()
+  if not method:match("^[A-Z]+$") then
+    error("Invalid HTTP method: " .. method)
+  end
   local scheme = normalize_scheme(opts.scheme)
   local path = tostring(opts.path or "/")
-  local timeout = tonumber(opts.timeout) or 30000
+  local timeout = math.floor(tonumber(opts.timeout) or 30000)
   local body = opts.body
 
   if path == "" then
     path = "/"
   elseif path:sub(1, 1) ~= "/" then
     path = "/" .. path
+  end
+  if path:find("[\r\n]") then
+    error("Invalid HTTP request path")
+  end
+  if timeout < 1 then
+    error("HTTP timeout must be a positive number")
   end
 
   if body ~= nil and type(body) ~= "string" then
@@ -410,7 +322,7 @@ function M.request(opts)
     error(state.err)
   end
 
-  return parse_response(table.concat(state.chunks))
+  return response_parser.parse(table.concat(state.chunks))
 end
 
 return M
