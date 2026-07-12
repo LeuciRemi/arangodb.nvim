@@ -58,7 +58,30 @@ return {
     h.fails("must contain string `name` and `url`", function()
       config.setup({ default_database = { name = "example" } })
     end)
+    h.fails("non%-negative integer", function()
+      config.setup({ cache_ttl = -1 })
+    end)
+    h.fails("positive integer", function()
+      config.setup({ diagnostics = { max_size = 0 } })
+    end)
     config.setup()
+  end),
+
+  h.test("structured errors include server and request context", function()
+    local errors = require("arangodb.errors")
+    local err = errors.new({
+      kind = "server",
+      message = "document missing",
+      status = 404,
+      error_num = 1202,
+      method = "GET",
+      path = "/_api/document/items/missing",
+    })
+    h.eq(true, errors.is(err, "server"))
+    h.matches("document missing", tostring(err))
+    h.matches("HTTP 404", tostring(err))
+    h.matches("ArangoDB 1202", tostring(err))
+    h.matches("GET /_api/document/items/missing", tostring(err))
   end),
 
   h.test("database candidates do not trigger implicit network discovery", function()

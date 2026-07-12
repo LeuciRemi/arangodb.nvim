@@ -13,7 +13,7 @@ for _, file in ipairs(files) do
       vim.api.nvim_out_write("ok - " .. test.name .. "\n")
     else
       failures[#failures + 1] = { name = test.name, error = err }
-      vim.api.nvim_err_write("not ok - " .. test.name .. "\n" .. err .. "\n")
+      vim.api.nvim_err_write("not ok - " .. test.name .. "\n" .. tostring(err) .. "\n")
     end
   end
 end

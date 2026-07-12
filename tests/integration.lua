@@ -24,6 +24,10 @@ local ok, err = xpcall(function()
   local saved = client.save_document(config, created.id, created.document)
   assert(saved.document.rank == 2)
 
+  created.document.rank = 3
+  local conflict_ok, conflict = pcall(client.save_document, config, created.id, created.document)
+  assert(not conflict_ok and require("arangodb.errors").is(conflict, "conflict"), "stale revision was not rejected")
+
   local fields = client.list_fields(config, source, 10)
   assert(vim.tbl_contains(fields, "name"))
   assert(vim.tbl_contains(fields, "rank"))

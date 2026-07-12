@@ -10,8 +10,8 @@ Parcourez, modifiez et administrez vos données ArangoDB sans quitter Neovim.
 ## Fonctionnalités
 
 - Navigation dans les bases, collections et documents avec `snacks.nvim`.
-- Recherche sur les champs échantillonnés avec pagination AQL.
-- Édition des documents JSON dans des buffers ordinaires et sauvegarde avec `:write`.
+- Recherche sur les champs échantillonnés avec pages AQL asynchrones basées sur des curseurs.
+- Édition avec `:write` et résolution des conflits concurrents sur `_rev`.
 - Création et duplication de documents sous forme de brouillons avant insertion.
 - Création, duplication, renommage et troncature des collections de documents ou d’arêtes.
 - Navigation vers les clés étrangères, relations imbriquées et références inverses détectées.
@@ -65,15 +65,23 @@ require("arangodb").setup({
   layout = { preset = "auto", preview = true },
   page_size = 50,
   field_sample_size = 200,
+  cache_ttl = 5000,
   http_timeout = 30000,
   tls_verify = true,
   tls_ca_file = nil,
+  diagnostics = {
+    enabled = false,
+    path = nil,
+    max_size = 1048576,
+  },
 })
 ```
 
 Toutes les options et leurs valeurs par défaut figurent dans le [README anglais](README.md#configuration) et dans `:help arangodb.nvim`. Une touche peut être désactivée avec `false`. Les raccourcis globaux sont désactivés par défaut afin de respecter la configuration de chacun.
 
 `auto_discover` est volontairement désactivé par défaut. Lorsqu’il est activé, le plugin interroge `/_api/database/user` avec les variables `NVIM_ARANGO_HOST`, port, schéma et identifiants. Aucun accès réseau implicite n’a donc lieu pendant la complétion des commandes ou le healthcheck.
+
+Les métadonnées, champs échantillonnés et métriques utilisent un cache court contrôlé par `cache_ttl` (`0` le désactive). Le journal de diagnostic facultatif écrit des événements JSONL nettoyés, sans identifiants, headers ou corps de requête. Son chemin par défaut est `stdpath("log") .. "/arangodb.nvim.log"`.
 
 ## Connexions et identifiants
 
@@ -160,9 +168,11 @@ Touches par défaut du picker de documents :
 
 Les opérations destructives demandent confirmation. Le renommage ou la troncature d’une collection est refusé si un buffer ArangoDB correspondant contient des changements non sauvegardés.
 
+La révision `_rev` protège les sauvegardes concurrentes. En cas de conflit, le plugin permet de recharger la version distante, de comparer les deux versions ou de forcer explicitement l’écrasement. Les lectures des pickers sont asynchrones et annulables ; la pagination utilise les curseurs ArangoDB.
+
 ## Limites
 
-- Les requêtes sont synchrones : un serveur lent peut bloquer l’éditeur jusqu’à `http_timeout`.
+- Les lectures des pickers sont asynchrones ; les commandes de mutation attendent encore la réponse du serveur.
 - HTTPS nécessite actuellement `curl`.
 - La détection des relations est heuristique.
 - La duplication d’une collection copie ses documents et son type, mais pas ses index, schémas, valeurs calculées ou autres propriétés.

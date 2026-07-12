@@ -10,8 +10,8 @@ English | [Français](README.fr.md) | [`:help arangodb.nvim`](doc/arangodb.nvim.
 ## Features
 
 - Browse databases, collections, and documents with `snacks.nvim`.
-- Search any sampled document field with paginated AQL queries.
-- Edit JSON documents in regular buffers and save them with `:write`.
+- Search any sampled document field with asynchronous, cursor-backed AQL pages.
+- Edit JSON documents with `:write` and resolve concurrent `_rev` conflicts.
 - Create or duplicate documents as drafts before inserting them.
 - Create, duplicate, rename, and truncate document or edge collections.
 - Follow direct foreign keys, nested relation objects, and inferred reverse links.
@@ -110,17 +110,25 @@ require("arangodb").setup({
   truncate_length = 120,
   max_field_depth = 4,
   aql_batch_size = 1000,
+  cache_ttl = 5000,
   default_sort = "doc._key ASC",
   show_system_collections = false,
   http_timeout = 30000,
   tls_verify = true,
   tls_ca_file = nil,
+  diagnostics = {
+    enabled = false,
+    path = nil,
+    max_size = 1048576,
+  },
 })
 ```
 
 Set any keymap to `false` to disable it. Global keymaps are unset by default so the plugin does not claim user mappings. `layout.preset = "auto"` selects a side-by-side view on wide screens and a stacked view on smaller screens.
 
 `auto_discover` is deliberately disabled by default. When enabled, the plugin queries `/_api/database/user` using the `NVIM_ARANGO_HOST`, port, scheme, and credential variables. This avoids unexpected network requests during command completion and health checks.
+
+Collection metadata, sampled fields, and figures use the short `cache_ttl` cache. Set it to `0` to disable caching. The optional diagnostic journal writes sanitized JSON-lines request metadata, never credentials, headers, or request bodies. Its default path is `stdpath("log") .. "/arangodb.nvim.log"`.
 
 ## Connections and credentials
 
@@ -207,6 +215,8 @@ Default document-picker actions:
 
 Destructive operations request confirmation. Renaming or truncating a collection is refused while a matching ArangoDB buffer has unsaved changes.
 
+Document saves use `_rev` as an optimistic concurrency guard. When the remote document changed, the plugin offers to reload it, compare local and remote JSON, or explicitly force the overwrite. Picker reads are asynchronous and cancellable; document pages use ArangoDB cursors and previously visited pages remain available locally.
+
 ## Lua API
 
 ```lua
@@ -222,7 +232,7 @@ Run `:checkhealth arangodb` to inspect Neovim compatibility, transports, TLS set
 
 ## Limitations
 
-- Requests are synchronous, so very slow servers can block the editor until `http_timeout` expires.
+- Picker reads are asynchronous; explicit mutation commands still wait for their server response.
 - HTTPS currently requires the external `curl` executable.
 - Related-document navigation is heuristic: it recognizes `_id`, `_key`, `*_id`, `*_key`, plural variants, nested relation objects, and reverse fields sampled from other collections.
 - Collection duplication copies documents and the collection type, but not indexes, schemas, computed values, or other collection properties.
