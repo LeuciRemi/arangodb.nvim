@@ -2,6 +2,8 @@
 local M = {}
 
 local uv = vim.uv or vim.loop
+local diagnostics = require("arangodb.diagnostics")
+local errors = require("arangodb.errors")
 local response_parser = require("arangodb.http.response")
 
 local BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -126,21 +128,6 @@ local function format_timeout_seconds(timeout)
   return string.format("%.3f", math.max(timeout, 1) / 1000)
 end
 
-local function run_command(args, input)
-  if vim.system then
-    local result = vim
-      .system(args, {
-        stdin = input,
-        text = true,
-      })
-      :wait()
-    return result.stdout or "", result.stderr or "", result.code or 0
-  end
-
-  local output = vim.fn.system(args, input or "")
-  return output, "", vim.v.shell_error
-end
-
 local function write_curl_headers(headers)
   local path = vim.fn.tempname()
   local fd, open_err = uv.fs_open(path, "w", 384)
@@ -163,8 +150,7 @@ local function write_curl_headers(headers)
   return path
 end
 
---- Shell out to curl for HTTPS requests and parse its full response output.
-local function curl_request(opts, scheme, host, port, method, path, headers, body, timeout)
+local function curl_args(opts, scheme, host, port, method, path, headers, body, timeout)
   if vim.fn.executable("curl") ~= 1 then
     error("HTTPS ArangoDB connections require `curl` to be installed")
   end
@@ -212,24 +198,10 @@ local function curl_request(opts, scheme, host, port, method, path, headers, bod
   local url_host = host:find(":", 1, true) and ("[" .. host .. "]") or host
   args[#args + 1] = string.format("%s://%s:%d%s", scheme, url_host, port, path)
 
-  local called, output, stderr, code = pcall(run_command, args, body)
-  pcall(uv.fs_unlink, header_file)
-  if not called then
-    error(output, 0)
-  end
-  if code ~= 0 then
-    local message = vim.trim(stderr ~= "" and stderr or output or "")
-    if message == "" then
-      message = string.format("curl exited with code %d", code)
-    end
-    error(message)
-  end
-
-  return response_parser.parse(output)
+  return args, header_file
 end
 
---- Execute a request through curl for HTTPS or through libuv TCP for HTTP.
-function M.request(opts)
+local function prepare_request(opts)
   opts = opts or {}
 
   if not uv then
@@ -272,82 +244,248 @@ function M.request(opts)
   end
 
   local headers = build_headers(opts, host, port, body)
-  if scheme == "https" then
-    return curl_request(opts, scheme, host, port, method, path, headers, body, timeout)
-  end
+  return {
+    opts = opts,
+    host = host,
+    port = port,
+    method = method,
+    scheme = scheme,
+    path = path,
+    timeout = timeout,
+    body = body,
+    headers = headers,
+  }
+end
 
-  local request = build_request(method, path, headers, body)
+local function transport_error(request, message, kind)
+  if errors.is(message) then
+    return message
+  end
+  return errors.new({
+    kind = kind or "transport",
+    message = tostring(message),
+    method = request.method,
+    path = request.path,
+  })
+end
+
+local function tcp_request_async(request, callback)
+  local raw_request = build_request(request.method, request.path, request.headers, request.body)
   local tcp = assert(uv.new_tcp())
   local timer = assert(uv.new_timer())
   local state = {
     done = false,
-    err = nil,
     chunks = {},
   }
 
-  local function finish(err)
+  local function finish(err, response)
     if state.done then
       return
     end
-
     state.done = true
-    state.err = err
 
     if timer then
       timer:stop()
       close_handle(timer)
       timer = nil
     end
-
     if tcp then
       pcall(tcp.read_stop, tcp)
       close_handle(tcp)
       tcp = nil
     end
+    callback(err, response)
   end
 
-  timer:start(timeout, 0, function()
-    finish(string.format("ArangoDB request timed out after %d ms", timeout))
+  timer:start(request.timeout, 0, function()
+    finish(string.format("ArangoDB request timed out after %d ms", request.timeout))
   end)
 
-  tcp:connect(host, port, function(connect_err)
+  tcp:connect(request.host, request.port, function(connect_err)
+    if state.done then
+      return
+    end
     if connect_err then
       finish(connect_err)
       return
     end
 
     tcp:read_start(function(read_err, chunk)
+      if state.done then
+        return
+      end
       if read_err then
         finish(read_err)
-        return
-      end
-
-      if chunk then
+      elseif chunk then
         state.chunks[#state.chunks + 1] = chunk
-        return
+      else
+        local ok, response = pcall(response_parser.parse, table.concat(state.chunks))
+        if ok then
+          finish(nil, response)
+        else
+          finish(response)
+        end
       end
-
-      finish(nil)
     end)
 
-    tcp:write(request, function(write_err)
+    tcp:write(raw_request, function(write_err)
       if write_err then
         finish(write_err)
       end
     end)
   end)
 
-  if not vim.wait(timeout + 100, function()
-    return state.done
+  return {
+    cancel = function()
+      finish("ArangoDB request cancelled")
+    end,
+  }
+end
+
+local function curl_request_async(request, callback)
+  local args, header_file = curl_args(
+    request.opts,
+    request.scheme,
+    request.host,
+    request.port,
+    request.method,
+    request.path,
+    request.headers,
+    request.body,
+    request.timeout
+  )
+  local state = { done = false }
+  local process
+
+  local function finish(err, response)
+    if state.done then
+      return
+    end
+    state.done = true
+    pcall(uv.fs_unlink, header_file)
+    callback(err, response)
+  end
+
+  local started, process_or_error = pcall(vim.system, args, {
+    stdin = request.body,
+    text = true,
+  }, function(result)
+    if state.done then
+      return
+    end
+    local output = result.stdout or ""
+    local stderr = result.stderr or ""
+    if result.code ~= 0 then
+      local message = vim.trim(stderr ~= "" and stderr or output)
+      finish(message ~= "" and message or string.format("curl exited with code %d", result.code))
+      return
+    end
+    local ok, response = pcall(response_parser.parse, output)
+    if ok then
+      finish(nil, response)
+    else
+      finish(response)
+    end
+  end)
+  if not started then
+    pcall(uv.fs_unlink, header_file)
+    error(process_or_error, 0)
+  end
+  process = process_or_error
+
+  return {
+    cancel = function()
+      if state.done then
+        return
+      end
+      if process then
+        pcall(process.kill, process, 15)
+      end
+      finish("ArangoDB request cancelled")
+    end,
+  }
+end
+
+--- Execute a non-blocking request and return a cancellable handle.
+function M.request_async(opts, callback)
+  assert(type(callback) == "function", "HTTP callback is required")
+  local prepared, request = pcall(prepare_request, opts)
+  if not prepared then
+    vim.schedule(function()
+      callback(errors.new({ kind = "configuration", message = tostring(request) }))
+    end)
+    return { cancel = function() end }
+  end
+  local started = uv.hrtime()
+  local completed = false
+
+  local function complete(err, response)
+    if completed then
+      return
+    end
+    completed = true
+    if err then
+      err = transport_error(request, err, tostring(err):find("cancelled", 1, true) and "cancelled" or "transport")
+    end
+    vim.schedule(function()
+      local response_failed = response and response.status and response.status >= 400
+      diagnostics.record({
+        method = request.method,
+        scheme = request.scheme,
+        host = request.host,
+        port = request.port,
+        path = request.path,
+        status = response and response.status or nil,
+        duration_ms = math.floor((uv.hrtime() - started) / 1000000),
+        outcome = (err or response_failed) and "error" or "success",
+        error_kind = err and err.kind or (response_failed and "server" or nil),
+      })
+      callback(err, response)
+    end)
+  end
+
+  local ok, handle = pcall(function()
+    if request.scheme == "https" then
+      return curl_request_async(request, complete)
+    end
+    return tcp_request_async(request, complete)
+  end)
+  if not ok then
+    complete(handle)
+    return { cancel = function() end }
+  end
+  return handle
+end
+
+--- Execute a request synchronously for command-style and mutation operations.
+function M.request(opts)
+  opts = opts or {}
+  local done = false
+  local response
+  local request_error
+  local handle = M.request_async(opts, function(err, value)
+    request_error = err
+    response = value
+    done = true
+  end)
+
+  local timeout = math.floor(tonumber(opts.timeout) or 30000)
+  if not vim.wait(timeout + 250, function()
+    return done
   end, 10) then
-    finish(string.format("ArangoDB request timed out after %d ms", timeout))
+    handle.cancel()
+    vim.wait(100, function()
+      return done
+    end, 10)
   end
 
-  if state.err then
-    error(state.err)
+  if request_error then
+    error(request_error, 0)
   end
-
-  return response_parser.parse(table.concat(state.chunks))
+  if not done then
+    error(errors.new({ kind = "transport", message = "ArangoDB request did not complete" }), 0)
+  end
+  return response
 end
 
 return M

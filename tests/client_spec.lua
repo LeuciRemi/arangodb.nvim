@@ -1,9 +1,31 @@
 local h = require("tests.helpers")
 
 local function with_client(handler, callback)
+  require("arangodb.cache").clear()
   local original_http = package.loaded["arangodb.http"]
   local original_client = package.loaded["arangodb.client"]
-  package.loaded["arangodb.http"] = { request = handler }
+  package.loaded["arangodb.http"] = {
+    request = handler,
+    request_async = function(opts, done)
+      local cancelled = false
+      vim.schedule(function()
+        if cancelled then
+          return
+        end
+        local ok, response = pcall(handler, opts)
+        if ok then
+          done(nil, response)
+        else
+          done(response)
+        end
+      end)
+      return {
+        cancel = function()
+          cancelled = true
+        end,
+      }
+    end,
+  }
   package.loaded["arangodb.client"] = nil
 
   local ok, err = xpcall(function()
@@ -83,6 +105,116 @@ return {
     end)
     h.eq("PUT", requests[1].method)
     h.matches("/_api/document/items/original$", requests[1].path)
+  end),
+
+  h.test("document revisions protect saves and conflicts are structured", function()
+    local requests = {}
+    local conflict = true
+    with_client(function(opts)
+      requests[#requests + 1] = vim.deepcopy(opts)
+      if opts.method == "PUT" and conflict then
+        return json_response({ error = true, errorNum = 1200, errorMessage = "revision conflict" }, 412)
+      end
+      return json_response({ _id = "items/a", _key = "a", _rev = "2", name = "saved" })
+    end, function(client)
+      local ok, err = pcall(client.save_document, config, "items/a", {
+        _id = "items/a",
+        _key = "a",
+        _rev = "1",
+        name = "local",
+      })
+      h.eq(false, ok)
+      h.eq(true, require("arangodb.errors").is(err, "conflict"))
+      h.eq(412, err.status)
+      h.eq('"1"', requests[1].headers["If-Match"])
+
+      conflict = false
+      client.save_document(config, "items/a", {
+        _id = "items/a",
+        _key = "a",
+        _rev = "1",
+        name = "local",
+      }, { force = true })
+      h.eq(nil, requests[2].headers)
+    end)
+  end),
+
+  h.test("cursor-backed browsing reads one page at a time asynchronously", function()
+    local requests = {}
+    with_client(function(opts)
+      requests[#requests + 1] = vim.deepcopy(opts)
+      if opts.method == "POST" then
+        return json_response({
+          result = {
+            { _id = "items/a", _key = "a" },
+            { _id = "items/b", _key = "b" },
+          },
+          count = 3,
+          hasMore = true,
+          id = "cursor-1",
+        })
+      end
+      return json_response({
+        result = { { _id = "items/c", _key = "c" } },
+        hasMore = false,
+      })
+    end, function(client)
+      local first
+      client.browse_collection_async(config, "items", "_key", "", 2, nil, function(err, data)
+        assert(not err, tostring(err))
+        first = data
+      end)
+      assert(vim.wait(1000, function()
+        return first ~= nil
+      end))
+      h.eq(2, #first.items)
+      h.eq(3, first.total_count)
+      h.eq("cursor-1", first.cursor_id)
+
+      local second
+      client.browse_collection_async(config, "items", "_key", "", 2, first.cursor_id, function(err, data)
+        assert(not err, tostring(err))
+        second = data
+      end)
+      assert(vim.wait(1000, function()
+        return second ~= nil
+      end))
+      h.eq(1, #second.items)
+      h.eq(false, second.has_more)
+    end)
+    h.eq("POST", requests[1].method)
+    h.eq(2, vim.json.decode(requests[1].body).batchSize)
+    h.eq(false, vim.json.decode(requests[1].body).query:find("LIMIT", 1, true) ~= nil)
+    h.eq("PUT", requests[2].method)
+    h.matches("/_api/cursor/cursor%-1$", requests[2].path)
+  end),
+
+  h.test("metadata uses the TTL cache and figures stay lazy", function()
+    local collection_calls = 0
+    local figure_calls = 0
+    with_client(function(opts)
+      if opts.path:match("/figures$") then
+        figure_calls = figure_calls + 1
+        return json_response({ count = 4, figures = { documentsSize = 100, indexSize = 20 } })
+      end
+      if opts.path:match("/_api/collection$") then
+        collection_calls = collection_calls + 1
+        return json_response({ result = { { name = "items", type = 2, status = 3 } } })
+      end
+      return json_response({ result = { name = "test" } })
+    end, function(client)
+      h.eq(1, #client.list_collection_details(config))
+      h.eq(1, #client.list_collection_details(config))
+      h.eq(1, collection_calls)
+
+      client.database_overview(config)
+      h.eq(0, figure_calls)
+      local metrics = client.collection_metrics(config, "items")
+      h.eq(4, metrics.count)
+      h.eq(120, metrics.size)
+      client.collection_metrics(config, "items")
+      h.eq(1, figure_calls)
+    end)
   end),
 
   h.test("escaped field paths distinguish literal dots from nested fields", function()

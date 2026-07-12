@@ -3,6 +3,7 @@ local M = {}
 
 local arango = require("arangodb.core")
 local client = require("arangodb.client")
+local errors = require("arangodb.errors")
 local utils = require("arangodb.utils")
 
 -- Keep track of the active picker and of the back stack shared by picker views.
@@ -332,6 +333,36 @@ local function try_call(title, fn, ...)
     return result
   end
   arango.notify_error(result, title or "ArangoDB")
+end
+
+--- Suspend a Snacks finder coroutine until a cancellable client request completes.
+local function await_picker_request(ctx, start)
+  local request_error
+  local result
+  local completed = false
+  local handle
+
+  handle = start(function(err, value)
+    if completed or ctx.async:aborted() then
+      return
+    end
+    completed = true
+    request_error = err
+    result = value
+    ctx.async:resume()
+  end)
+
+  ctx.async:on("abort", function()
+    if completed then
+      return
+    end
+    completed = true
+    if handle and handle.cancel then
+      handle.cancel()
+    end
+  end)
+  ctx.async:suspend()
+  return request_error, result
 end
 
 local function try_json(config, title, subcommand, extra)
@@ -1569,20 +1600,6 @@ local function open_route(route, prev_picker)
   }, prev_picker)
 end
 
-local function related_browse_payload(opts)
-  return try_call(
-    "ArangoDB",
-    client.browse_related_collection,
-    opts.config,
-    opts.collection,
-    opts.field,
-    opts.values,
-    opts.search,
-    opts.offset,
-    opts.limit
-  )
-end
-
 --- Reopen the previous ArangoDB route from the shared history stack.
 go_back = function(current)
   local route = pop_history()
@@ -1613,10 +1630,71 @@ local function jump_to_related(config, relation, current, context)
   open_route(route, current)
 end
 
+local function open_conflict_diff(buf, local_payload, remote_payload)
+  local local_text = utils.json_pretty(local_payload)
+  local remote_text = utils.json_pretty(remote_payload)
+  local diff = vim.diff(remote_text, local_text, {
+    result_type = "unified",
+    ctxlen = 3,
+  })
+  diff = "--- remote\n+++ local\n" .. diff
+  vim.cmd("vnew")
+  local diff_buf = vim.api.nvim_get_current_buf()
+  vim.api.nvim_buf_set_lines(diff_buf, 0, -1, false, vim.split(diff, "\n", { plain = true }))
+  vim.bo[diff_buf].buftype = "nofile"
+  vim.bo[diff_buf].bufhidden = "wipe"
+  vim.bo[diff_buf].swapfile = false
+  vim.bo[diff_buf].modifiable = false
+  vim.bo[diff_buf].filetype = "diff"
+  pcall(vim.api.nvim_buf_set_name, diff_buf, "arangodb-conflict://" .. (vim.b[buf].arangodb_document_id or "document"))
+end
+
 --- Attach buffer-local commands, keymaps, and :write integration to a document.
 local function document_actions(config, buf)
   if vim.b[buf].arangodb_actions_initialized then
     return
+  end
+
+  local function apply_saved_result(result, is_new)
+    M.open_document(config, vim.tbl_extend("force", result, { database = config.database, buf = buf }))
+    refresh_picker()
+    vim.notify(is_new and "Document created" or "Document saved", vim.log.levels.INFO)
+  end
+
+  local function save_existing_document(payload, force)
+    local ok, result =
+      pcall(client.save_document, config, vim.b[buf].arangodb_document_id, payload, force and { force = true } or nil)
+    if ok then
+      apply_saved_result(result, false)
+      return
+    end
+    if not errors.is(result, "conflict") then
+      arango.notify_error(result, "ArangoDB Save")
+      return
+    end
+
+    vim.ui.select({ "Reload remote version", "Compare versions", "Force overwrite" }, {
+      prompt = "Document changed on the server",
+    }, function(choice)
+      if not choice then
+        return
+      end
+      if choice == "Force overwrite" then
+        save_existing_document(payload, true)
+        return
+      end
+
+      local remote = try_call("ArangoDB Conflict", client.get_document, config, vim.b[buf].arangodb_document_id)
+      if not remote then
+        return
+      end
+      if choice == "Reload remote version" then
+        M.open_document(config, vim.tbl_extend("force", remote, { database = config.database, buf = buf }))
+        vim.notify("Remote document reloaded", vim.log.levels.INFO)
+      else
+        open_conflict_diff(buf, payload, remote.document or remote)
+      end
+    end)
   end
 
   local function save_document()
@@ -1632,15 +1710,14 @@ local function document_actions(config, buf)
     if is_new then
       result = try_call(action, client.create_document, config, vim.b[buf].arangodb_document_collection, payload)
     else
-      result = try_call(action, client.save_document, config, vim.b[buf].arangodb_document_id, payload)
+      save_existing_document(payload, false)
+      return
     end
     if not result then
       return
     end
 
-    M.open_document(config, vim.tbl_extend("force", result, { database = config.database, buf = buf }))
-    refresh_picker()
-    vim.notify(is_new and "Document created" or "Document saved", vim.log.levels.INFO)
+    apply_saved_result(result, true)
   end
 
   local function open_related_picker()
@@ -1912,10 +1989,13 @@ browse_collections = function(config, opts, prev_picker)
   local meta = {
     search = opts.search or "",
     collection_count = 0,
-    overview = nil,
-    overview_loaded = false,
-    collection_lookup = nil,
+    overview = {
+      name = config.database,
+      endpoint = string.format("%s:%s", tostring(config.host), tostring(config.port)),
+    },
+    collection_lookup = {},
   }
+  local preview_request
 
   local function current_search(current)
     if current and current.input and current.input.filter and type(current.input.filter.search) == "string" then
@@ -1925,48 +2005,23 @@ browse_collections = function(config, opts, prev_picker)
   end
 
   local function clear_collection_overview()
-    meta.overview = nil
-    meta.overview_loaded = false
-    meta.collection_lookup = nil
+    meta.collection_lookup = {}
   end
 
-  local function ensure_collection_overview(collections)
+  local function collection_items(collections, search)
     meta.collection_count = #collections
-    if meta.overview_loaded then
-      return
-    end
-
-    meta.overview_loaded = true
-    local ok, overview = pcall(client.database_overview, config)
-    if not ok or type(overview) ~= "table" then
-      meta.overview = {
-        name = config.database,
-        endpoint = string.format("%s:%s", tostring(config.host), tostring(config.port)),
-        collection_count = #collections,
-      }
-      return
-    end
-
-    meta.overview = overview
-    meta.collection_count = overview.collection_count or #collections
+    meta.overview.collection_count = #collections
     meta.collection_lookup = {}
-    for _, item in ipairs(overview.collections or {}) do
+    for _, item in ipairs(collections) do
       meta.collection_lookup[item.name] = item
     end
-  end
-
-  local function collection_items(search)
-    local collections = try_lines(config, "ArangoDB", "collections")
-    if not collections then
-      error("Failed to load ArangoDB collections")
-    end
-    ensure_collection_overview(collections)
 
     local query = string.lower(vim.trim(search or ""))
     meta.search = search or ""
 
     local items = {}
-    for _, collection in ipairs(collections) do
+    for _, detail in ipairs(collections) do
+      local collection = detail.name
       if query == "" or string.lower(collection):find(query, 1, true) ~= nil then
         items[#items + 1] = {
           text = collection,
@@ -1983,6 +2038,31 @@ browse_collections = function(config, opts, prev_picker)
       end
     end
     return items
+  end
+
+  local function preview_collection(ctx)
+    local collection = ctx.item and ctx.item.item and ctx.item.item.name
+    if not collection then
+      return
+    end
+    if preview_request and preview_request.cancel then
+      preview_request.cancel()
+    end
+
+    local function render()
+      ctx.preview:reset()
+      ctx.preview:set_lines(vim.split(collection_preview_text(config, collection, meta), "\n", { plain = true }))
+    end
+    render()
+
+    preview_request = client.collection_metrics_async(config, collection, function(err, metrics)
+      if err or not ctx.preview.item or not ctx.preview.item.item or ctx.preview.item.item.name ~= collection then
+        return
+      end
+      meta.collection_lookup[collection] =
+        vim.tbl_extend("force", meta.collection_lookup[collection] or { name = collection }, metrics or {})
+      render()
+    end)
   end
 
   local function selected_collection(current, item)
@@ -2082,17 +2162,23 @@ browse_collections = function(config, opts, prev_picker)
     layout = picker_layout,
     finder = function(_, ctx)
       local search = ctx.filter.search or ""
-      local ok, items = pcall(collection_items, search)
-      if not ok then
-        vim.schedule(function()
-          arango.notify_error(items, "ArangoDB")
+      return function(cb)
+        local err, collections = await_picker_request(ctx, function(done)
+          return client.list_collection_details_async(config, done)
         end)
-        return {}
+        if err then
+          vim.schedule(function()
+            arango.notify_error(err, "ArangoDB")
+          end)
+          return
+        end
+        for _, item in ipairs(collection_items(collections or {}, search)) do
+          cb(item)
+        end
       end
-      return items
     end,
     format = "text",
-    preview = "preview",
+    preview = preview_collection,
     confirm = function(current, item)
       open_collection(current, item)
     end,
@@ -2110,6 +2196,9 @@ browse_collections = function(config, opts, prev_picker)
       update_collection_picker_title(current, config, current_search(current), opts.allow_database_back == true)
     end,
     on_close = function()
+      if preview_request and preview_request.cancel then
+        preview_request.cancel()
+      end
       if state.picker == picker then
         state.picker = nil
       end
@@ -2226,17 +2315,21 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
   end
 
   opts = opts or {}
+  local page_size = plugin_options().page_size
+  local initial_offset = math.max(tonumber(opts.offset) or 0, 0)
 
   local meta = {
     database = config.database,
     collection = collection,
     field = field,
-    offset = math.max(tonumber(opts.offset) or 0, 0),
-    limit = plugin_options().page_size,
+    offset = initial_offset,
+    limit = page_size,
     search = initial_search or "",
     items = {},
     total_count = nil,
     has_more = false,
+    page_index = math.floor(initial_offset / page_size) + 1,
+    pages = {},
   }
 
   local route_kind = opts.kind or (type(field) == "table" and "related" or "collection")
@@ -2322,44 +2415,39 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
     end)
   end
 
-  local function load_page(search, offset)
-    local data
-    if route_kind == "related" then
-      data = related_browse_payload({
-        config = config,
-        collection = collection,
-        field = field,
-        values = opts.values,
-        search = search,
-        offset = offset,
-        limit = meta.limit,
-      })
-    else
-      data = run_json(config, "browse", {
-        "--collection",
-        collection,
-        "--field",
-        field,
-        "--search",
-        search or "",
-        "--offset",
-        offset,
-        "--limit",
-        meta.limit,
-      })
+  local function close_active_cursor()
+    local last_page = meta.pages[#meta.pages]
+    if last_page and last_page.cursor_id and last_page.has_more then
+      client.close_cursor_async(config, last_page.cursor_id)
     end
+  end
 
-    if not data then
-      error("Failed to load ArangoDB data")
-    end
+  local function reset_pages(search)
+    close_active_cursor()
+    meta.search = search or ""
+    meta.page_index = 1
+    meta.offset = 0
+    meta.pages = {}
+    meta.items = {}
+    meta.total_count = nil
+    meta.has_more = false
+  end
 
-    meta.search = data.search or ""
-    meta.offset = data.offset or 0
-    meta.limit = data.limit or meta.limit
-    meta.total_count = data.total_count
+  local function invalidate_pages(page_index)
+    close_active_cursor()
+    meta.pages = {}
+    meta.page_index = math.max(tonumber(page_index) or 1, 1)
+    meta.offset = (meta.page_index - 1) * meta.limit
+    meta.items = {}
+    meta.total_count = nil
+    meta.has_more = false
+  end
+
+  local function format_page(data, index)
+    meta.offset = (index - 1) * meta.limit
+    meta.total_count = data.total_count or meta.total_count
     meta.has_more = data.has_more or false
     meta.items = data.items or {}
-
     local items = {}
     for index, entry in ipairs(meta.items) do
       items[#items + 1] = {
@@ -2370,6 +2458,49 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
       }
     end
     return items
+  end
+
+  local function request_cursor_page(ctx, search, cursor_id)
+    return await_picker_request(ctx, function(done)
+      if route_kind == "related" then
+        return client.browse_related_collection_async(
+          config,
+          collection,
+          field,
+          opts.values,
+          search,
+          meta.limit,
+          cursor_id,
+          done
+        )
+      end
+      return client.browse_collection_async(config, collection, field, search, meta.limit, cursor_id, done)
+    end)
+  end
+
+  local function load_page(ctx, search)
+    if search ~= meta.search then
+      reset_pages(search)
+    end
+
+    while #meta.pages < meta.page_index do
+      local previous = meta.pages[#meta.pages]
+      if previous and not previous.has_more then
+        meta.page_index = math.max(#meta.pages, 1)
+        break
+      end
+      local err, data = request_cursor_page(ctx, search, previous and previous.cursor_id or nil)
+      if err then
+        return err
+      end
+      meta.pages[#meta.pages + 1] = data
+    end
+
+    local page = meta.pages[meta.page_index]
+    if not page then
+      return nil, {}
+    end
+    return nil, format_page(page, meta.page_index)
   end
 
   local picker
@@ -2386,15 +2517,18 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
     layout = picker_layout,
     finder = function(_, ctx)
       local search = ctx.filter.search or ""
-      local offset = search == meta.search and meta.offset or 0
-      local ok, items = pcall(load_page, search, offset)
-      if not ok then
-        vim.schedule(function()
-          arango.notify_error(items, "ArangoDB")
-        end)
-        return {}
+      return function(cb)
+        local err, items = load_page(ctx, search)
+        if err then
+          vim.schedule(function()
+            arango.notify_error(err, "ArangoDB")
+          end)
+          return
+        end
+        for _, item in ipairs(items) do
+          cb(item)
+        end
       end
-      return items
     end,
     format = "text",
     preview = "preview",
@@ -2425,6 +2559,7 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
       end
     end,
     on_close = function()
+      close_active_cursor()
       if state.picker == picker then
         state.picker = nil
       end
@@ -2456,7 +2591,7 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
       end,
       arango_truncate_collection = function(current)
         truncate_collection_with_prompt(config, collection, function()
-          meta.offset = 0
+          reset_pages(meta.search)
           refresh_picker(current)
           vim.notify(string.format("Collection %s truncated", collection), vim.log.levels.INFO)
         end, current)
@@ -2466,7 +2601,7 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
           vim.notify("Already on last page", vim.log.levels.INFO)
           return
         end
-        meta.offset = meta.offset + meta.limit
+        meta.page_index = meta.page_index + 1
         current:find()
       end,
       arango_prev_page = function(current)
@@ -2474,7 +2609,7 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
           vim.notify("Already on first page", vim.log.levels.INFO)
           return
         end
-        meta.offset = math.max(0, meta.offset - meta.limit)
+        meta.page_index = math.max(1, meta.page_index - 1)
         current:find()
       end,
       arango_change_field = function(current)
@@ -2485,12 +2620,12 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
         choose_field(config, collection, current, function(new_field)
           meta.field = new_field
           field = new_field
-          meta.offset = 0
+          reset_pages(meta.search)
           current:find({ refresh = true })
         end)
       end,
       arango_reset_search = function(current)
-        meta.offset = 0
+        reset_pages("")
         current.input:set(nil, "")
         current:find({ refresh = true })
       end,
@@ -2535,9 +2670,8 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
         end
 
         close_document_buffers({ database = config.database, id = document_id, include_drafts = false })
-        if meta.offset > 0 and #meta.items == 1 then
-          meta.offset = math.max(0, meta.offset - meta.limit)
-        end
+        local target_page = meta.page_index > 1 and #meta.items == 1 and (meta.page_index - 1) or meta.page_index
+        invalidate_pages(target_page)
         current:find({ refresh = true })
         vim.notify("Document deleted", vim.log.levels.INFO)
       end,

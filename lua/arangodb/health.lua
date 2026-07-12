@@ -45,6 +45,11 @@ function M.check()
   info("http timeout: `" .. tostring(config.http_timeout or 30000) .. "ms`")
   info("automatic database discovery: `" .. tostring(config.auto_discover == true) .. "`")
   info("tls verify: `" .. tostring(config.tls_verify ~= false) .. "`")
+  info("metadata cache ttl: `" .. tostring(config.cache_ttl or 0) .. "ms`")
+  info("diagnostic journal: `" .. tostring(config.diagnostics and config.diagnostics.enabled == true) .. "`")
+  if config.diagnostics and config.diagnostics.enabled == true then
+    info("diagnostic path: `" .. require("arangodb.diagnostics").path() .. "`")
+  end
   if type(config.tls_ca_file) == "string" and config.tls_ca_file ~= "" then
     info("tls ca file: `" .. config.tls_ca_file .. "`")
     if vim.fn.filereadable(config.tls_ca_file) ~= 1 then

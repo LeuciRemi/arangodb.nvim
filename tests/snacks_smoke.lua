@@ -12,6 +12,20 @@ package.loaded["arangodb.client"] = {
   list_collections = function()
     return { "items" }
   end,
+  list_collection_details_async = function(_, done)
+    vim.schedule(function()
+      done(nil, {
+        { name = "items", type = "document", status = "loaded" },
+      })
+    end)
+    return { cancel = function() end }
+  end,
+  collection_metrics_async = function(_, _, done)
+    vim.schedule(function()
+      done(nil, { count = 1, size = 42 })
+    end)
+    return { cancel = function() end }
+  end,
   database_overview = function()
     return {
       name = "test",
@@ -34,6 +48,31 @@ package.loaded["arangodb.client"] = {
       items = {},
     }
   end,
+  browse_collection_async = function(_, _, _, search, limit, cursor_id, done)
+    vim.schedule(function()
+      done(nil, {
+        database = "test",
+        collection = "items",
+        field = "_key",
+        search = search,
+        limit = limit,
+        total_count = cursor_id and nil or 1,
+        has_more = false,
+        items = {
+          {
+            key = "one",
+            id = "items/one",
+            field = "_key",
+            field_value = "one",
+            field_value_text = "one",
+            preview = '{"_id":"items/one","_key":"one"}',
+          },
+        },
+      })
+    end)
+    return { cancel = function() end }
+  end,
+  close_cursor_async = function() end,
 }
 
 require("snacks").setup({ picker = { enabled = true } })
@@ -49,7 +88,24 @@ require("arangodb.browser").open({
 
 assert(
   vim.wait(1000, function()
-    return #vim.api.nvim_list_wins() > 1
+    local pickers = require("snacks.picker.core.picker").get()
+    return #pickers == 1 and pickers[1].finder:count() == 1
   end),
-  "Snacks picker did not open"
+  "Snacks collection picker did not load asynchronously"
+)
+
+require("snacks.picker.core.picker").get()[1]:close()
+require("arangodb.browser").open({
+  kind = "collection",
+  config = database,
+  collection = "items",
+  field = "_key",
+})
+
+assert(
+  vim.wait(1000, function()
+    local pickers = require("snacks.picker.core.picker").get()
+    return #pickers == 1 and pickers[1].finder:count() == 1
+  end),
+  "Snacks document picker did not load a cursor page asynchronously"
 )

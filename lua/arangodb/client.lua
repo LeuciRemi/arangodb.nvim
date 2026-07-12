@@ -1,7 +1,9 @@
 --- ArangoDB HTTP client helpers used by the picker and document buffers.
 local M = {}
 
+local cache = require("arangodb.cache")
 local core = require("arangodb.core")
+local errors = require("arangodb.errors")
 local http = require("arangodb.http")
 local utils = require("arangodb.utils")
 
@@ -11,6 +13,30 @@ end
 
 local function timeout()
   return plugin_options().http_timeout or 30000
+end
+
+local function cache_ttl()
+  return plugin_options().cache_ttl or 0
+end
+
+local function connection_cache_prefix(config)
+  local credential_fingerprint = config.password and vim.fn.sha256(tostring(config.password)):sub(1, 16) or ""
+  return table.concat({
+    tostring(config.scheme),
+    tostring(config.host),
+    tostring(config.port),
+    tostring(config.database),
+    tostring(config.user),
+    credential_fingerprint,
+  }, "\0") .. "\0"
+end
+
+local function cache_key(config, resource)
+  return connection_cache_prefix(config) .. resource
+end
+
+local function invalidate_cache(config)
+  cache.invalidate(connection_cache_prefix(config), true)
 end
 
 local function database_root(config)
@@ -25,9 +51,18 @@ local function trim_message(value)
 end
 
 --- Decode a JSON response and turn ArangoDB API failures into Lua errors.
-local function decode_json_response(response)
+local function decode_json_response(response, context)
+  context = context or {}
   if type(response) ~= "table" or type(response.status) ~= "number" then
-    error("Invalid response from the ArangoDB HTTP transport")
+    error(
+      errors.new({
+        kind = "protocol",
+        message = "Invalid response from the ArangoDB HTTP transport",
+        method = context.method,
+        path = context.path,
+      }),
+      0
+    )
   end
 
   local body = response.body or ""
@@ -41,57 +76,100 @@ local function decode_json_response(response)
   end
 
   if response.status >= 400 then
+    local message
+    local error_num
     if type(decoded) == "table" then
-      local message = decoded.errorMessage or decoded.message
-      if type(message) == "string" and message ~= "" then
-        error(trim_message(message))
-      end
+      message = decoded.errorMessage or decoded.message
+      error_num = decoded.errorNum
     end
-
-    if body ~= "" then
-      error(trim_message(body))
+    if type(message) ~= "string" or message == "" then
+      message = body ~= "" and trim_message(body) or ("ArangoDB request failed with HTTP " .. response.status)
     end
-
-    error("ArangoDB request failed with HTTP " .. response.status)
+    local conflict = response.status == 412 or (response.status == 409 and error_num == 1200)
+    error(
+      errors.new({
+        kind = conflict and "conflict" or "server",
+        message = trim_message(message),
+        status = response.status,
+        error_num = error_num,
+        method = context.method,
+        path = context.path,
+      }),
+      0
+    )
   end
 
   if decoded == nil then
     if body == "" then
       return {}
     end
-    error("Invalid JSON response from ArangoDB")
+    error(
+      errors.new({
+        kind = "protocol",
+        message = "Invalid JSON response from ArangoDB",
+        status = response.status,
+        method = context.method,
+        path = context.path,
+      }),
+      0
+    )
   end
 
   return decoded
 end
 
 --- Send an authenticated request through the transport configured for the database.
-local function request(config, method, path, payload)
+local function request_options(config, method, path, payload, opts)
   local options = plugin_options()
-  local body = payload ~= nil and vim.json.encode(payload) or nil
-  local response = http.request({
+  opts = opts or {}
+  return {
     method = method,
     scheme = config.scheme,
     host = config.host,
     port = config.port,
     path = path,
-    body = body,
+    body = payload ~= nil and vim.json.encode(payload) or nil,
+    headers = opts.headers,
     user = config.user,
     password = config.password,
     timeout = timeout(),
     tls_verify = options.tls_verify,
     tls_ca_file = options.tls_ca_file,
-  })
+  }
+end
 
-  return decode_json_response(response)
+local function request(config, method, path, payload, opts)
+  local request_opts = request_options(config, method, path, payload, opts)
+  local response = http.request(request_opts)
+  return decode_json_response(response, { method = method, path = path })
+end
+
+local function request_async(config, method, path, payload, callback, opts)
+  local request_opts = request_options(config, method, path, payload, opts)
+  return http.request_async(request_opts, function(err, response)
+    if err then
+      callback(err)
+      return
+    end
+    local ok, decoded = pcall(decode_json_response, response, { method = method, path = path })
+    if ok then
+      callback(nil, decoded)
+    else
+      callback(decoded)
+    end
+  end)
 end
 
 local function server_request(config, method, path, payload)
   return request(config, method, path, payload)
 end
 
-local function database_request(config, method, path, payload)
-  return request(config, method, database_root(config) .. path, payload)
+local function database_request(config, method, path, payload, opts)
+  return request(config, method, database_root(config) .. path, payload, opts)
+end
+
+local function database_request_async(config, method, path, payload, callback, opts)
+  return request_async(config, method, database_root(config) .. path, payload, callback, opts)
 end
 
 local function split_document_id(document_id)
@@ -398,6 +476,12 @@ end
 
 --- Return collection metadata enriched with labels used by the picker preview.
 function M.list_collection_details(config)
+  local key = cache_key(config, "collections")
+  local cached = cache.get(key)
+  if cached then
+    return cached
+  end
+
   local data = database_request(config, "GET", "/_api/collection")
   local collections = {}
 
@@ -419,7 +503,45 @@ function M.list_collection_details(config)
   table.sort(collections, function(left, right)
     return left.name < right.name
   end)
-  return collections
+  return cache.set(key, collections, cache_ttl())
+end
+
+--- Return collection details without blocking the editor.
+function M.list_collection_details_async(config, callback)
+  local key = cache_key(config, "collections")
+  local cached = cache.get(key)
+  if cached then
+    vim.schedule(function()
+      callback(nil, cached)
+    end)
+    return { cancel = function() end }
+  end
+
+  return database_request_async(config, "GET", "/_api/collection", nil, function(err, data)
+    if err then
+      callback(err)
+      return
+    end
+    local collections = {}
+    for _, item in ipairs(data.result or {}) do
+      if plugin_options().show_system_collections or not item.isSystem then
+        collections[#collections + 1] = {
+          name = item.name,
+          id = item.id,
+          global_id = item.globallyUniqueId,
+          type = collection_type_label(item.type),
+          status = collection_status_label(item.status),
+          wait_for_sync = item.waitForSync == true,
+          cache_enabled = item.cacheEnabled == true,
+          collection = item,
+        }
+      end
+    end
+    table.sort(collections, function(left, right)
+      return left.name < right.name
+    end)
+    callback(nil, cache.set(key, collections, cache_ttl()))
+  end)
 end
 
 --- Return collection names sorted for the browser picker.
@@ -435,7 +557,8 @@ function M.list_collections(config)
 end
 
 --- Gather high-level database metrics for the collections overview preview.
-function M.database_overview(config)
+function M.database_overview(config, opts)
+  opts = opts or {}
   local overview = {
     name = config.database,
     endpoint = string.format("%s:%s", tostring(config.host), tostring(config.port)),
@@ -455,6 +578,10 @@ function M.database_overview(config)
     overview.write_concern = info.writeConcern
   else
     overview.info_error = trim_message(current)
+  end
+
+  if opts.include_figures ~= true then
+    return overview
   end
 
   local total_documents = 0
@@ -495,12 +622,61 @@ function M.database_overview(config)
   return overview
 end
 
+--- Fetch the expensive figures for one collection on demand.
+function M.collection_metrics(config, collection)
+  local key = cache_key(config, "metrics:" .. collection)
+  local cached = cache.get(key)
+  if cached then
+    return cached
+  end
+  local figures_data = database_request(config, "GET", collection_path(collection) .. "/figures")
+  local figures = figures_data.figures
+  return cache.set(key, {
+    count = figures_data.count,
+    size = collection_size_bytes(figures),
+    engine = type(figures) == "table" and figures.engine or figures_data.engine,
+  }, cache_ttl())
+end
+
+--- Fetch collection figures asynchronously for lazy picker previews.
+function M.collection_metrics_async(config, collection, callback)
+  local key = cache_key(config, "metrics:" .. collection)
+  local cached = cache.get(key)
+  if cached then
+    vim.schedule(function()
+      callback(nil, cached)
+    end)
+    return { cancel = function() end }
+  end
+  return database_request_async(config, "GET", collection_path(collection) .. "/figures", nil, function(err, data)
+    if err then
+      callback(err)
+      return
+    end
+    local figures = data.figures
+    callback(
+      nil,
+      cache.set(key, {
+        count = data.count,
+        size = collection_size_bytes(figures),
+        engine = type(figures) == "table" and figures.engine or data.engine,
+      }, cache_ttl())
+    )
+  end)
+end
+
 --- Sample collection documents to extract candidate field paths for filtering.
 function M.list_fields(config, collection, sample_size)
+  local sample = math.max(tonumber(sample_size) or 100, 1)
+  local key = cache_key(config, string.format("fields:%s:%d", collection, sample))
+  local cached = cache.get(key)
+  if cached then
+    return cached
+  end
   local query = "FOR doc IN @@collection LIMIT @sample RETURN doc"
   local data = run_aql(config, query, {
     ["@collection"] = collection,
-    sample = math.max(tonumber(sample_size) or 100, 1),
+    sample = sample,
   })
   local fields = {
     _id = true,
@@ -518,7 +694,7 @@ function M.list_fields(config, collection, sample_size)
   end
 
   table.sort(result)
-  return result
+  return cache.set(key, result, cache_ttl())
 end
 
 --- Fetch a single document and format it for the editor buffer.
@@ -529,7 +705,7 @@ function M.get_document(config, document_id)
 end
 
 --- Replace an existing document and return the refreshed document payload.
-function M.save_document(config, document_id, document)
+function M.save_document(config, document_id, document, opts)
   if type(document) ~= "table" then
     error("Document payload must be a JSON object")
   end
@@ -546,8 +722,12 @@ function M.save_document(config, document_id, document)
     error("Document _key cannot be changed")
   end
 
-  local saved = database_request(config, "PUT", document_path(collection, key), document)
+  opts = opts or {}
+  local revision = opts.force ~= true and type(document._rev) == "string" and document._rev or nil
+  local headers = revision and { ["If-Match"] = vim.json.encode(revision) } or nil
+  local saved = database_request(config, "PUT", document_path(collection, key), document, { headers = headers })
   local current = get_document_raw(config, collection, key)
+  invalidate_cache(config)
 
   return {
     database = config.database,
@@ -560,10 +740,126 @@ function M.save_document(config, document_id, document)
   }
 end
 
+local function cursor_page_async(config, query, bind_vars, limit, cursor_id, callback)
+  if cursor_id then
+    return database_request_async(config, "PUT", "/_api/cursor/" .. core.url_encode(cursor_id), nil, callback)
+  end
+
+  local payload = {
+    query = query,
+    bindVars = bind_vars,
+    batchSize = limit,
+    count = true,
+  }
+  return database_request_async(config, "POST", "/_api/cursor", payload, callback)
+end
+
+local function browse_page(data, config, collection, field, search, limit, related)
+  local items = {}
+  for _, document in ipairs(data.result or {}) do
+    local fields = related and related_field_paths(field) or field
+    local value = related and nil or extract_value(document, field)
+    items[#items + 1] = {
+      key = document._key,
+      id = document._id,
+      field = fields,
+      field_value = value,
+      field_value_text = related and related_field_value_text(document, fields) or truncate_text(value),
+      preview = utils.json_pretty(document),
+    }
+  end
+  return {
+    database = config.database,
+    collection = collection,
+    field = field,
+    search = search,
+    limit = limit,
+    total_count = data.count,
+    has_more = data.hasMore == true,
+    cursor_id = data.id,
+    items = items,
+  }
+end
+
+--- Browse one cursor-backed collection page without blocking Neovim.
+function M.browse_collection_async(config, collection, field, search, limit, cursor_id, callback)
+  field = field or "_key"
+  search = search or ""
+  limit = math.max(tonumber(limit) or 50, 1)
+
+  local bind_vars = { ["@collection"] = collection }
+  local query_lines = { "FOR doc IN @@collection" }
+  if search ~= "" then
+    bind_vars.search = search:lower()
+    query_lines[#query_lines + 1] =
+      string.format("FILTER CONTAINS(LOWER(TO_STRING(%s)), @search)", field_expression(field))
+  end
+  query_lines[#query_lines + 1] = "SORT " .. (plugin_options().default_sort or "doc._key ASC")
+  query_lines[#query_lines + 1] = "RETURN doc"
+
+  return cursor_page_async(config, table.concat(query_lines, "\n"), bind_vars, limit, cursor_id, function(err, data)
+    if err then
+      callback(err)
+      return
+    end
+    local ok, page = pcall(browse_page, data, config, collection, field, search, limit, false)
+    if ok then
+      callback(nil, page)
+    else
+      callback(page)
+    end
+  end)
+end
+
+--- Browse one cursor-backed related-document page without blocking Neovim.
+function M.browse_related_collection_async(config, collection, field, value, search, limit, cursor_id, callback)
+  local values = related_search_values(value)
+  local fields = related_field_paths(field)
+  search = search or ""
+  limit = math.max(tonumber(limit) or 50, 1)
+
+  local bind_vars = {
+    ["@collection"] = collection,
+    values = values,
+  }
+  local query_lines = {
+    "FOR doc IN @@collection",
+    "FILTER " .. related_filter_clause(fields),
+  }
+  if search ~= "" then
+    bind_vars.search = search:lower()
+    query_lines[#query_lines + 1] = "FILTER CONTAINS(LOWER(doc._id), @search) OR CONTAINS(LOWER(doc._key), @search)"
+  end
+  query_lines[#query_lines + 1] = "SORT " .. (plugin_options().default_sort or "doc._key ASC")
+  query_lines[#query_lines + 1] = "RETURN doc"
+
+  return cursor_page_async(config, table.concat(query_lines, "\n"), bind_vars, limit, cursor_id, function(err, data)
+    if err then
+      callback(err)
+      return
+    end
+    local ok, page = pcall(browse_page, data, config, collection, fields, search, limit, true)
+    if ok then
+      callback(nil, page)
+    else
+      callback(page)
+    end
+  end)
+end
+
+--- Best-effort cleanup for a cursor abandoned by a picker.
+function M.close_cursor_async(config, cursor_id)
+  if not cursor_id or cursor_id == "" then
+    return
+  end
+  database_request_async(config, "DELETE", "/_api/cursor/" .. core.url_encode(cursor_id), nil, function() end)
+end
+
 --- Delete a document by id and return the ArangoDB response metadata.
 function M.delete_document(config, document_id)
   local collection, key = split_document_id(document_id)
   local deleted = database_request(config, "DELETE", document_path(collection, key))
+  invalidate_cache(config)
 
   return {
     database = config.database,
@@ -618,6 +914,7 @@ function M.create_document(config, collection, document)
   local target_collection, key, payload = sanitize_new_document(collection, document)
   local created = database_request(config, "POST", "/_api/document/" .. core.url_encode(target_collection), payload)
   local current = get_document_raw(config, target_collection, created._key or key)
+  invalidate_cache(config)
 
   return {
     database = config.database,
@@ -642,6 +939,7 @@ function M.create_collection(config, collection, collection_type)
     name = collection,
     type = type_code,
   })
+  invalidate_cache(config)
 
   return {
     database = config.database,
@@ -664,6 +962,7 @@ function M.rename_collection(config, collection, new_name)
   local renamed = database_request(config, "PUT", collection_path(collection) .. "/rename", {
     name = new_name,
   })
+  invalidate_cache(config)
 
   return {
     database = config.database,
@@ -676,6 +975,7 @@ end
 --- Remove every document from a collection without deleting the collection itself.
 function M.truncate_collection(config, collection)
   local truncated = database_request(config, "PUT", collection_path(collection) .. "/truncate?compact=false")
+  invalidate_cache(config)
 
   return {
     database = config.database,
@@ -687,6 +987,7 @@ end
 --- Delete a collection. This internal helper is also used by integration cleanup.
 function M.delete_collection(config, collection)
   local deleted = database_request(config, "DELETE", collection_path(collection))
+  invalidate_cache(config)
 
   return {
     database = config.database,

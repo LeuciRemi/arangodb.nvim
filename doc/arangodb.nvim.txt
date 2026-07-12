@@ -19,9 +19,9 @@ INTRODUCTION                                              *arangodb.nvim-intro*
 
 arangodb.nvim provides a picker-based interface for ArangoDB. It can:
 
-- browse databases, collections, and paginated documents
+- browse databases, collections, and cursor-paginated documents asynchronously
 - search sampled document fields
-- edit JSON documents and save them with |:write|
+- edit JSON documents, save with |:write|, and resolve revision conflicts
 - create and duplicate draft documents
 - create, duplicate, rename, and truncate collections
 - infer direct, nested, and reverse document relations
@@ -104,11 +104,17 @@ Call setup() once after installing the plugin:
     truncate_length = 120,
     max_field_depth = 4,
     aql_batch_size = 1000,
+    cache_ttl = 5000,
     default_sort = "doc._key ASC",
     show_system_collections = false,
     http_timeout = 30000,
     tls_verify = true,
     tls_ca_file = nil,
+    diagnostics = {
+      enabled = false,
+      path = nil,
+      max_size = 1048576,
+    },
   })
 <
 
@@ -146,7 +152,7 @@ field_sample_size ~
     Documents sampled when discovering filter and reverse-relation fields.
 
 page_size ~
-    Documents displayed per picker page.
+    Documents requested per ArangoDB cursor page.
 
 json_indent ~
     Spaces used to format JSON buffers and previews.
@@ -159,6 +165,10 @@ max_field_depth ~
 
 aql_batch_size ~
     Cursor batch size used while consuming AQL responses.
+
+cache_ttl ~
+    Lifetime in milliseconds for cached collection metadata, sampled fields,
+    and figures. Set to 0 to disable caching.
 
 default_sort ~
     AQL sort expression used by document and relation listings.
@@ -174,6 +184,11 @@ tls_verify ~
 
 tls_ca_file ~
     Optional CA bundle passed to curl with --cacert.
+
+diagnostics ~
+    Optional sanitized JSON-lines request journal. enabled activates it, path
+    overrides stdpath("log")/arangodb.nvim.log, and max_size rotates the file.
+    Credentials, headers, and request bodies are never written.
 
 ===============================================================================
 CONNECTIONS                                          *arangodb.nvim-connections*
@@ -225,7 +240,9 @@ COMMANDS                                              *arangodb.nvim-commands*
                                                 *:ArangoDocumentSave*
 :ArangoDocumentSave
     Save the current document. A draft is inserted on its first save. |:write|
-    performs the same action in an ArangoDB document buffer.
+    performs the same action in an ArangoDB document buffer. Existing
+    documents use _rev to detect concurrent changes and offer reload, compare,
+    or explicit force-overwrite actions on conflict.
 
                                             *:ArangoDocumentDuplicate*
 :ArangoDocumentDuplicate
@@ -305,10 +322,11 @@ Developer commands:
   make docs
 <
 
-Requests are synchronous and may block Neovim until http_timeout expires.
+Picker reads are asynchronous and cancellable, and document pagination uses
+ArangoDB cursors. Explicit mutation commands wait for their server response.
 HTTPS requires curl. Relation detection is heuristic. Collection duplication
-copies documents and collection type, but not indexes, schemas, computed
-values, or other collection properties.
+copies documents and collection type, but not indexes, schemas, computed values,
+or other collection properties.
 
 The optional integration suite needs a disposable database and performs
 destructive collection operations:

@@ -182,6 +182,9 @@ end
 
 --- Display a normalized user-facing error message.
 function M.notify_error(err, title)
+  if require("arangodb.errors").is(err) then
+    err = require("arangodb.errors").format(err)
+  end
   if type(err) == "string" then
     err = vim.trim(err)
   end

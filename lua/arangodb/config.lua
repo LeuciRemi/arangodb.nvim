@@ -43,11 +43,17 @@ M.defaults = {
   truncate_length = 120,
   max_field_depth = 4,
   aql_batch_size = 1000,
+  cache_ttl = 5000,
   default_sort = "doc._key ASC",
   show_system_collections = false,
   http_timeout = 30000,
   tls_verify = true,
   tls_ca_file = nil,
+  diagnostics = {
+    enabled = false,
+    path = nil,
+    max_size = 1048576,
+  },
 }
 
 local options = vim.deepcopy(M.defaults)
@@ -64,6 +70,12 @@ end
 local function assert_positive_integer(name, value)
   if type(value) ~= "number" or value < 1 or value % 1 ~= 0 then
     error(string.format("arangodb.nvim: `%s` must be a positive integer", name), 3)
+  end
+end
+
+local function assert_nonnegative_integer(name, value)
+  if type(value) ~= "number" or value < 0 or value % 1 ~= 0 then
+    error(string.format("arangodb.nvim: `%s` must be a non-negative integer", name), 3)
   end
 end
 
@@ -137,15 +149,27 @@ local function validate(opts)
     end
   end
 
+  if opts.cache_ttl ~= nil then
+    assert_nonnegative_integer("cache_ttl", opts.cache_ttl)
+  end
+
   assert_type("default_sort", opts.default_sort, "string", true)
   assert_type("auto_discover", opts.auto_discover, "boolean", true)
   assert_type("show_system_collections", opts.show_system_collections, "boolean", true)
   assert_type("tls_verify", opts.tls_verify, "boolean", true)
   assert_type("tls_ca_file", opts.tls_ca_file, "string", true)
+  assert_type("diagnostics", opts.diagnostics, "table", true)
 
   if opts.layout then
     assert_type("layout.preset", opts.layout.preset, "string", true)
     assert_type("layout.preview", opts.layout.preview, "boolean", true)
+  end
+  if opts.diagnostics then
+    assert_type("diagnostics.enabled", opts.diagnostics.enabled, "boolean", true)
+    assert_type("diagnostics.path", opts.diagnostics.path, "string", true)
+    if opts.diagnostics.max_size ~= nil then
+      assert_positive_integer("diagnostics.max_size", opts.diagnostics.max_size)
+    end
   end
 end
 
@@ -154,6 +178,10 @@ function M.setup(opts)
   opts = opts or {}
   validate(opts)
   options = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), vim.deepcopy(opts))
+  local loaded_cache = package.loaded["arangodb.cache"]
+  if loaded_cache then
+    loaded_cache.clear()
+  end
   return options
 end
 
