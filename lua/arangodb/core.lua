@@ -107,13 +107,27 @@ function M.arango_url(database)
 end
 
 local function split_authority(authority)
-  local bracketed_host, bracketed_port = authority:match("^%[([^%]]+)%]:?(%d*)$")
-  if bracketed_host then
-    return bracketed_host, bracketed_port
+  if authority:sub(1, 1) == "[" then
+    local bracketed_host, bracketed_port = authority:match("^%[([^%]]+)%]:(%d+)$")
+    if bracketed_host then
+      return bracketed_host, bracketed_port
+    end
+
+    bracketed_host = authority:match("^%[([^%]]+)%]$")
+    if bracketed_host then
+      return bracketed_host, ""
+    end
+
+    return nil, nil
   end
 
-  local host, port = authority:match("^([^:]+):?(%d*)$")
-  return host, port
+  local host, port = authority:match("^([^:]+):(%d+)$")
+  if host then
+    return host, port
+  end
+
+  host = authority:match("^([^:]+)$")
+  return host, host and "" or nil
 end
 
 --- Parse a connection URL into the fields used by the HTTP client.

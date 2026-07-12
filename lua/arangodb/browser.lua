@@ -1055,7 +1055,8 @@ local function path_tail(path)
   if path == nil or path == "" then
     return nil
   end
-  return path:match("([^.]+)$") or path
+  local segments = utils.field_path_segments(path)
+  return segments[#segments]
 end
 
 local function collection_aliases(name)
@@ -1189,8 +1190,8 @@ local function related_values(document, collections)
   }
 
   local function source_depth(source)
-    local _, count = tostring(source or ""):gsub("%.", "")
-    return count
+    local ok, segments = pcall(utils.field_path_segments, tostring(source or ""))
+    return ok and (#segments - 1) or 0
   end
 
   local function format_sources(sources)
@@ -1284,7 +1285,8 @@ local function related_values(document, collections)
       return false
     end
 
-    local source = scope ~= "" and (scope .. "." .. field_name) or field_name
+    local segment = utils.escape_field_segment(field_name)
+    local source = scope ~= "" and (scope .. "." .. segment) or segment
     local inferred_collection = resolve_collection_name(info.base, resolved_collections)
 
     if info.multiple then
@@ -1389,7 +1391,8 @@ local function related_values(document, collections)
 
     for key, nested in pairs(value) do
       if not add_field_relations(scope, key, nested) and type(nested) == "table" then
-        local path = scope ~= "" and (scope .. "." .. key) or key
+        local segment = utils.escape_field_segment(key)
+        local path = scope ~= "" and (scope .. "." .. segment) or segment
         walk(path, nested)
       end
     end
@@ -1629,7 +1632,7 @@ local function document_actions(config, buf)
     if is_new then
       result = try_call(action, client.create_document, config, vim.b[buf].arangodb_document_collection, payload)
     else
-      result = try_call(action, client.save_document, config, payload)
+      result = try_call(action, client.save_document, config, vim.b[buf].arangodb_document_id, payload)
     end
     if not result then
       return
@@ -1711,7 +1714,11 @@ local function document_actions(config, buf)
     end
 
     if
-      not ensure_unmodified_document_buffers({ id = document_id, include_drafts = false }, "deleting this document")
+      not ensure_unmodified_document_buffers({
+        database = config.database,
+        id = document_id,
+        include_drafts = false,
+      }, "deleting this document")
     then
       return
     end
@@ -1721,7 +1728,7 @@ local function document_actions(config, buf)
       return
     end
 
-    close_document_buffers({ id = document_id, include_drafts = false })
+    close_document_buffers({ database = config.database, id = document_id, include_drafts = false })
     refresh_picker()
     vim.notify("Document deleted", vim.log.levels.INFO)
   end
@@ -2498,14 +2505,7 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
         local relations = related_values(payload, collections)
         vim.list_extend(relations, reverse_related_values(config, payload, collections))
         open_related_selector(config, relations, function(choice)
-          jump_to_related(config, choice, current, {
-            kind = route_kind,
-            config = config,
-            collection = collection,
-            field = meta.field,
-            search = meta.search,
-            offset = meta.offset,
-          })
+          jump_to_related(config, choice, current, current_route())
         end)
       end,
       arango_delete_document = function(current, item)
@@ -2520,7 +2520,11 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
         end
 
         if
-          not ensure_unmodified_document_buffers({ id = document_id, include_drafts = false }, "deleting this document")
+          not ensure_unmodified_document_buffers({
+            database = config.database,
+            id = document_id,
+            include_drafts = false,
+          }, "deleting this document")
         then
           return
         end
@@ -2530,7 +2534,7 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
           return
         end
 
-        close_document_buffers({ id = document_id, include_drafts = false })
+        close_document_buffers({ database = config.database, id = document_id, include_drafts = false })
         if meta.offset > 0 and #meta.items == 1 then
           meta.offset = math.max(0, meta.offset - meta.limit)
         end

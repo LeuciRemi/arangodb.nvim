@@ -236,7 +236,7 @@ local function run_aql(config, query, bind_vars, batch_size)
   }
 end
 
---- Collect dotted field paths from sampled documents for the filter picker.
+--- Collect escaped dotted field paths from sampled documents for the filter picker.
 local function collect_field_paths(value, prefix, result, depth, max_depth)
   prefix = prefix or ""
   result = result or {}
@@ -248,7 +248,8 @@ local function collect_field_paths(value, prefix, result, depth, max_depth)
   end
 
   for key, nested in pairs(value) do
-    local path = prefix ~= "" and (prefix .. "." .. key) or key
+    local segment = utils.escape_field_segment(key)
+    local path = prefix ~= "" and (prefix .. "." .. segment) or segment
     result[path] = true
     if type(nested) == "table" and not utils.is_list(nested) then
       collect_field_paths(nested, path, result, depth + 1, max_depth)
@@ -264,7 +265,7 @@ local function extract_value(document, field_path)
   end
 
   local value = document
-  for part in field_path:gmatch("[^.]+") do
+  for _, part in ipairs(utils.field_path_segments(field_path)) do
     if type(value) ~= "table" then
       return nil
     end
@@ -281,10 +282,7 @@ local function field_expression(field_path)
   end
 
   local expression = "doc"
-  for part in field_path:gmatch("[^.]+") do
-    if part:find("[.%[%]]") then
-      error("Invalid field path segment: " .. part)
-    end
+  for _, part in ipairs(utils.field_path_segments(field_path)) do
     expression = expression .. "[" .. vim.json.encode(part) .. "]"
   end
 
@@ -531,17 +529,23 @@ function M.get_document(config, document_id)
 end
 
 --- Replace an existing document and return the refreshed document payload.
-function M.save_document(config, document)
+function M.save_document(config, document_id, document)
   if type(document) ~= "table" then
     error("Document payload must be a JSON object")
   end
 
-  local document_id = document._id
-  if not document_id then
-    error("Document payload must contain _id")
+  if type(document_id) ~= "string" or document_id == "" then
+    error("Missing document id")
   end
 
   local collection, key = split_document_id(document_id)
+  if document._id ~= nil and document._id ~= document_id then
+    error("Document _id cannot be changed")
+  end
+  if document._key ~= nil and document._key ~= key then
+    error("Document _key cannot be changed")
+  end
+
   local saved = database_request(config, "PUT", document_path(collection, key), document)
   local current = get_document_raw(config, collection, key)
 
