@@ -27,6 +27,51 @@ function M.is_list(value)
   return true
 end
 
+--- Escape a JSON object key for use as one segment of a dotted field path.
+function M.escape_field_segment(value)
+  return (tostring(value):gsub("\\", "\\\\"):gsub("%.", "\\."))
+end
+
+--- Split a dotted field path while honoring escaped dots and backslashes.
+function M.field_path_segments(field_path)
+  if type(field_path) ~= "string" or field_path == "" then
+    error("Invalid field path")
+  end
+
+  local segments = {}
+  local current = {}
+  local escaped = false
+
+  for index = 1, #field_path do
+    local char = field_path:sub(index, index)
+    if escaped then
+      current[#current + 1] = char
+      escaped = false
+    elseif char == "\\" then
+      local next_char = field_path:sub(index + 1, index + 1)
+      if next_char == "." or next_char == "\\" then
+        escaped = true
+      else
+        current[#current + 1] = char
+      end
+    elseif char == "." then
+      segments[#segments + 1] = table.concat(current)
+      current = {}
+    else
+      current[#current + 1] = char
+    end
+  end
+
+  segments[#segments + 1] = table.concat(current)
+  for _, segment in ipairs(segments) do
+    if segment == "" then
+      error("Invalid empty field path segment: " .. field_path)
+    end
+  end
+
+  return segments
+end
+
 --- Pretty-print a Lua value as indented JSON text.
 --- When indent is omitted the configured json_indent option is used.
 function M.json_pretty(value, indent, depth)

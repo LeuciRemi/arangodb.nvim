@@ -21,7 +21,7 @@ local ok, err = xpcall(function()
   assert(created.id == source .. "/first")
 
   created.document.rank = 2
-  local saved = client.save_document(config, created.document)
+  local saved = client.save_document(config, created.id, created.document)
   assert(saved.document.rank == 2)
 
   local fields = client.list_fields(config, source, 10)

@@ -54,6 +54,73 @@ return {
     h.eq("example", payload.name)
   end),
 
+  h.test("saved documents cannot redirect writes by changing their identity", function()
+    local requests = {}
+    with_client(function(opts)
+      requests[#requests + 1] = vim.deepcopy(opts)
+      return json_response({})
+    end, function(client)
+      h.fails("_id cannot be changed", function()
+        client.save_document(config, "items/original", {
+          _id = "items/other",
+          _key = "other",
+          name = "example",
+        })
+      end)
+      h.fails("_key cannot be changed", function()
+        client.save_document(config, "items/original", {
+          _id = "items/original",
+          _key = "other",
+          name = "example",
+        })
+      end)
+      h.eq(0, #requests)
+
+      client.save_document(config, "items/original", {
+        _key = "original",
+        name = "example",
+      })
+    end)
+    h.eq("PUT", requests[1].method)
+    h.matches("/_api/document/items/original$", requests[1].path)
+  end),
+
+  h.test("escaped field paths distinguish literal dots from nested fields", function()
+    local queries = {}
+    with_client(function(opts)
+      if opts.path:match("/_api/cursor$") then
+        local payload = vim.json.decode(opts.body)
+        queries[#queries + 1] = payload.query
+        return json_response({
+          result = {
+            {
+              _id = "items/a",
+              _key = "a",
+              ["profile.name"] = "literal",
+              profile = { name = "nested" },
+              ["items[0]"] = "bracketed",
+            },
+          },
+          hasMore = false,
+        })
+      end
+      return json_response({ count = 1 })
+    end, function(client)
+      local literal = client.browse_collection(config, "items", "profile\\.name", "value", 0, 10)
+      local nested = client.browse_collection(config, "items", "profile.name", "value", 0, 10)
+      local bracketed = client.browse_collection(config, "items", "items[0]", "value", 0, 10)
+      local fields = client.list_fields(config, "items", 10)
+      h.eq("literal", literal.items[1].field_value)
+      h.eq("nested", nested.items[1].field_value)
+      h.eq("bracketed", bracketed.items[1].field_value)
+      h.eq(true, vim.tbl_contains(fields, "profile\\.name"))
+      h.eq(true, vim.tbl_contains(fields, "profile.name"))
+    end)
+    h.eq(true, queries[1]:find('doc["profile.name"]', 1, true) ~= nil)
+    h.eq(true, queries[2]:find('doc["profile"]["name"]', 1, true) ~= nil)
+    h.eq(true, queries[3]:find('doc["items[0]"]', 1, true) ~= nil)
+  end),
+
   h.test("collection browsing keeps one look-ahead item for pagination", function()
     local cursor_payload
     with_client(function(opts)

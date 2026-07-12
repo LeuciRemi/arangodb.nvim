@@ -31,6 +31,9 @@ return {
       "http://localhost:70000/example",
       "http://localhost/example?query=true",
       "http://localhost/",
+      "http://localhost:/example",
+      "http://[::1]8529/example",
+      "http://[::1]:/example",
     }) do
       h.eq(nil, core.parse_connection(value), value)
     end
@@ -89,5 +92,13 @@ return {
   h.test("JSON formatting is deterministic", function()
     local utils = require("arangodb.utils")
     h.eq('{\n  "a": [\n    true,\n    null\n  ],\n  "b": 2\n}', utils.json_pretty({ b = 2, a = { true, vim.NIL } }))
+  end),
+
+  h.test("field path escaping preserves literal dots and backslashes", function()
+    local utils = require("arangodb.utils")
+    h.eq({ "profile.name" }, utils.field_path_segments("profile\\.name"))
+    h.eq({ "profile", "name" }, utils.field_path_segments("profile.name"))
+    h.eq({ "path\\name" }, utils.field_path_segments("path\\\\name"))
+    h.eq("profile\\.name", utils.escape_field_segment("profile.name"))
   end),
 }

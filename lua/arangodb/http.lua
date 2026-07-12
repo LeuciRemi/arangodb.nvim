@@ -141,6 +141,28 @@ local function run_command(args, input)
   return output, "", vim.v.shell_error
 end
 
+local function write_curl_headers(headers)
+  local path = vim.fn.tempname()
+  local fd, open_err = uv.fs_open(path, "w", 384)
+  if not fd then
+    error("Unable to create secure curl header file: " .. tostring(open_err))
+  end
+
+  local lines = {}
+  for _, name in ipairs(sorted_header_names(headers)) do
+    lines[#lines + 1] = string.format("%s: %s", name, headers[name])
+  end
+
+  local ok, written, write_err = pcall(uv.fs_write, fd, table.concat(lines, "\n") .. "\n", 0)
+  pcall(uv.fs_close, fd)
+  if not ok or not written then
+    pcall(uv.fs_unlink, path)
+    error("Unable to write secure curl header file: " .. tostring(ok and write_err or written))
+  end
+
+  return path
+end
+
 --- Shell out to curl for HTTPS requests and parse its full response output.
 local function curl_request(opts, scheme, host, port, method, path, headers, body, timeout)
   if vim.fn.executable("curl") ~= 1 then
@@ -177,10 +199,9 @@ local function curl_request(opts, scheme, host, port, method, path, headers, bod
     args[#args + 1] = opts.tls_ca_file
   end
 
-  for _, name in ipairs(sorted_header_names(curl_headers)) do
-    args[#args + 1] = "--header"
-    args[#args + 1] = string.format("%s: %s", name, curl_headers[name])
-  end
+  local header_file = write_curl_headers(curl_headers)
+  args[#args + 1] = "--header"
+  args[#args + 1] = "@" .. header_file
 
   if body ~= nil then
     args[#args + 1] = "--data-binary"
@@ -191,7 +212,11 @@ local function curl_request(opts, scheme, host, port, method, path, headers, bod
   local url_host = host:find(":", 1, true) and ("[" .. host .. "]") or host
   args[#args + 1] = string.format("%s://%s:%d%s", scheme, url_host, port, path)
 
-  local output, stderr, code = run_command(args, body)
+  local called, output, stderr, code = pcall(run_command, args, body)
+  pcall(uv.fs_unlink, header_file)
+  if not called then
+    error(output, 0)
+  end
   if code ~= 0 then
     local message = vim.trim(stderr ~= "" and stderr or output or "")
     if message == "" then
