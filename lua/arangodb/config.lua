@@ -33,6 +33,29 @@ M.defaults = {
     duplicate = nil,
     related = nil,
   },
+  aql_keymaps = {
+    execute = "<leader>ar",
+    validate = "<leader>av",
+    explain = "<leader>ae",
+    profile = "<leader>ap",
+    bind_vars = "<leader>ab",
+    history = "<leader>ah",
+    cancel = "<leader>ac",
+    next_page = "<C-n>",
+    prev_page = "<C-p>",
+  },
+  aql = {
+    batch_size = 100,
+    cursor_ttl = 300,
+    max_runtime = nil,
+    result_split = "auto",
+    history = {
+      enabled = true,
+      max_entries = 100,
+      path = nil,
+      store_bind_vars = true,
+    },
+  },
   layout = {
     preset = "auto",
     preview = true,
@@ -76,6 +99,12 @@ end
 local function assert_nonnegative_integer(name, value)
   if type(value) ~= "number" or value < 0 or value % 1 ~= 0 then
     error(string.format("arangodb.nvim: `%s` must be a non-negative integer", name), 3)
+  end
+end
+
+local function assert_nonnegative_number(name, value)
+  if type(value) ~= "number" or value < 0 then
+    error(string.format("arangodb.nvim: `%s` must be a non-negative number", name), 3)
   end
 end
 
@@ -133,7 +162,9 @@ local function validate(opts)
   validate_keymaps("keymaps", opts.keymaps)
   validate_keymaps("picker_keymaps", opts.picker_keymaps)
   validate_keymaps("document_keymaps", opts.document_keymaps)
+  validate_keymaps("aql_keymaps", opts.aql_keymaps)
   assert_type("layout", opts.layout, "table", true)
+  assert_type("aql", opts.aql, "table", true)
 
   for _, name in ipairs({
     "field_sample_size",
@@ -169,6 +200,34 @@ local function validate(opts)
     assert_type("diagnostics.path", opts.diagnostics.path, "string", true)
     if opts.diagnostics.max_size ~= nil then
       assert_positive_integer("diagnostics.max_size", opts.diagnostics.max_size)
+    end
+  end
+  if opts.aql then
+    if opts.aql.batch_size ~= nil then
+      assert_positive_integer("aql.batch_size", opts.aql.batch_size)
+    end
+    if opts.aql.cursor_ttl ~= nil then
+      assert_positive_integer("aql.cursor_ttl", opts.aql.cursor_ttl)
+    end
+    if opts.aql.max_runtime ~= nil then
+      assert_nonnegative_number("aql.max_runtime", opts.aql.max_runtime)
+    end
+    if
+      opts.aql.result_split ~= nil
+      and opts.aql.result_split ~= "auto"
+      and opts.aql.result_split ~= "right"
+      and opts.aql.result_split ~= "bottom"
+    then
+      error("arangodb.nvim: `aql.result_split` must be `auto`, `right`, or `bottom`", 3)
+    end
+    assert_type("aql.history", opts.aql.history, "table", true)
+    if opts.aql.history then
+      assert_type("aql.history.enabled", opts.aql.history.enabled, "boolean", true)
+      assert_type("aql.history.path", opts.aql.history.path, "string", true)
+      assert_type("aql.history.store_bind_vars", opts.aql.history.store_bind_vars, "boolean", true)
+      if opts.aql.history.max_entries ~= nil then
+        assert_positive_integer("aql.history.max_entries", opts.aql.history.max_entries)
+      end
     end
   end
 end

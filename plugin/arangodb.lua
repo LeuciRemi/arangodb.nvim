@@ -5,4 +5,5 @@ end
 
 vim.g.loaded_arangodb_plugin = 1
 
+vim.filetype.add({ extension = { aql = "aql" } })
 require("arangodb.commands").setup()

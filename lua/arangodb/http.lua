@@ -129,10 +129,17 @@ local function format_timeout_seconds(timeout)
 end
 
 local function write_curl_headers(headers)
-  local path = vim.fn.tempname()
-  local fd, open_err = uv.fs_open(path, "w", 384)
+  local temp_dir = uv.os_tmpdir()
+  if type(temp_dir) ~= "string" or temp_dir == "" then
+    error("Unable to locate a temporary directory for curl headers")
+  end
+
+  -- HTTPS requests can start from a libuv callback. Keep temporary-file
+  -- creation entirely in libuv because Vimscript functions such as tempname()
+  -- are forbidden in Neovim's fast-event context.
+  local fd, path = uv.fs_mkstemp(vim.fs.joinpath(temp_dir, "arangodb-nvim-curl-XXXXXX"))
   if not fd then
-    error("Unable to create secure curl header file: " .. tostring(open_err))
+    error("Unable to create secure curl header file: " .. tostring(path))
   end
 
   local lines = {}
@@ -429,7 +436,8 @@ function M.request_async(opts, callback)
     end
     vim.schedule(function()
       local response_failed = response and response.status and response.status >= 400
-      diagnostics.record({
+      -- Diagnostics are best-effort and must never change request completion.
+      pcall(diagnostics.record, {
         method = request.method,
         scheme = request.scheme,
         host = request.host,

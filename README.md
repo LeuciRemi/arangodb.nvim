@@ -11,6 +11,7 @@ English | [Français](README.fr.md) | [`:help arangodb.nvim`](doc/arangodb.nvim.
 
 - Browse databases, collections, and documents with `snacks.nvim`.
 - Search any sampled document field with asynchronous, cursor-backed AQL pages.
+- Write, validate, explain, execute, and profile AQL in dedicated Neovim buffers.
 - Edit JSON documents with `:write` and resolve concurrent `_rev` conflicts.
 - Create or duplicate documents as drafts before inserting them.
 - Create, duplicate, rename, and truncate document or edge collections.
@@ -99,6 +100,29 @@ require("arangodb").setup({
     duplicate = nil,
     related = nil,
   },
+  aql_keymaps = {
+    execute = "<leader>ar",
+    validate = "<leader>av",
+    explain = "<leader>ae",
+    profile = "<leader>ap",
+    bind_vars = "<leader>ab",
+    history = "<leader>ah",
+    cancel = "<leader>ac",
+    next_page = "<C-n>",
+    prev_page = "<C-p>",
+  },
+  aql = {
+    batch_size = 100,
+    cursor_ttl = 300,
+    max_runtime = nil,
+    result_split = "auto",
+    history = {
+      enabled = true,
+      max_entries = 100,
+      path = nil,
+      store_bind_vars = true,
+    },
+  },
 
   layout = {
     preset = "auto",
@@ -172,6 +196,8 @@ For private certificate authorities, set `tls_ca_file`. Disabling `tls_verify` i
 :ArangoBrowse my_database
 :ArangoResume
 :ArangoBack
+:ArangoAql
+:ArangoAql my_database
 ```
 
 Inside a document buffer:
@@ -183,6 +209,37 @@ Inside a document buffer:
 :ArangoDocumentDelete
 :ArangoDocumentRelated
 ```
+
+Inside an AQL editor opened by `:ArangoAql`:
+
+```vim
+:ArangoAqlExecute
+:ArangoAqlValidate
+:ArangoAqlExplain
+:ArangoAqlProfile
+:ArangoAqlBindVars
+:ArangoAqlHistory
+:ArangoAqlCancel
+```
+
+The query buffer uses the `aql` filetype. Its unlisted companion JSON bind-variable buffer opens automatically below it while focus stays on the query; selecting another listed AQL query buffer automatically switches the companion split to that session's variables. The AQL commands above and their normal-mode mappings are available from both buffers and always target the associated query; visual-selection mappings remain query-only. Collection variables such as `@@collection` use a key such as `"@collection"`. If the current tab page already contains an AQL session, `:ArangoAql` opens the next session in a new tab page instead of stacking its splits. Results stay with their session and open in a read-only JSON split, at the right on wide screens and below on smaller screens. Cursor pages already visited stay cached locally.
+
+Execution and profiling first ask ArangoDB for the optimized plan. Queries with `plan.isModificationQuery = true` require explicit confirmation showing the target database and write collections. Explain and validation never execute the query.
+
+History is searchable through `snacks.nvim` and is stored by default in `stdpath("data") .. "/arangodb.nvim/aql_history.json"` with user-only permissions. It never stores connection URLs, credentials, results, or errors. Queries and bind variables may themselves contain sensitive data; set `aql.history.enabled = false` or `store_bind_vars = false` when needed. After `store_bind_vars` is disabled, the next history write also removes bind variables from retained entries.
+
+Default AQL-buffer mappings:
+
+| Key | Action |
+| --- | --- |
+| `<leader>ar` | Execute the query or visual selection |
+| `<leader>av` | Validate without execution |
+| `<leader>ae` | Explain without execution |
+| `<leader>ap` | Execute with profiling |
+| `<leader>ab` | Edit bind variables |
+| `<leader>ah` | Browse local history |
+| `<leader>ac` | Cancel and close the active cursor |
+| `<C-p>` / `<C-n>` | Previous / next result page |
 
 Default collection-picker actions:
 
@@ -222,6 +279,7 @@ Document saves use `_rev` as an optimistic concurrency guard. When the remote do
 ```lua
 require("arangodb").setup(opts)
 require("arangodb").browse({ database = "work" })
+require("arangodb").aql({ database = "work", query = "RETURN 1" })
 require("arangodb").resume()
 require("arangodb").back()
 ```
@@ -233,6 +291,7 @@ Run `:checkhealth arangodb` to inspect Neovim compatibility, transports, TLS set
 ## Limitations
 
 - Picker reads are asynchronous; explicit mutation commands still wait for their server response.
+- AQL cancellation stops the local request and closes known cursors. Without `aql.max_runtime`, an in-flight server query may continue according to the server configuration.
 - HTTPS currently requires the external `curl` executable.
 - Related-document navigation is heuristic: it recognizes `_id`, `_key`, `*_id`, `*_key`, plural variants, nested relation objects, and reverse fields sampled from other collections.
 - Collection duplication copies documents and the collection type, but not indexes, schemas, computed values, or other collection properties.

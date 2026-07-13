@@ -189,6 +189,155 @@ return {
     h.matches("/_api/cursor/cursor%-1$", requests[2].path)
   end),
 
+  h.test("cached async requests can start from a fast event", function()
+    local callback_result
+    local started
+    local start_error
+    local was_fast_event
+    with_client(function()
+      return json_response({ result = { { name = "items", type = 2, status = 3 } } })
+    end, function(client)
+      local uv = vim.uv or vim.loop
+      local timer = assert(uv.new_timer())
+      timer:start(0, 0, function()
+        timer:stop()
+        timer:close()
+        was_fast_event = vim.in_fast_event()
+        started, start_error = pcall(client.list_collection_details_async, {
+          scheme = "http",
+          host = "localhost",
+          port = 8529,
+          database = "test",
+          user = "root",
+          password = "secret",
+        }, function(err, data)
+          callback_result = err or data
+        end)
+      end)
+
+      assert(vim.wait(1000, function()
+        return started ~= nil and (started == false or callback_result ~= nil)
+      end))
+      h.eq(true, was_fast_event)
+      assert(started, tostring(start_error))
+      h.eq("items", callback_result[1].name)
+    end)
+  end),
+
+  h.test("AQL validation, explain, profile, and cursor pages use async endpoints", function()
+    local requests = {}
+    with_client(function(opts)
+      requests[#requests + 1] = vim.deepcopy(opts)
+      if opts.path:match("/_api/query$") then
+        return json_response({ parsed = true, bindVars = { "value" } })
+      end
+      if opts.path:match("/_api/explain$") then
+        return json_response({ plan = { isModificationQuery = false } })
+      end
+      if opts.path:match("/_api/cursor/cursor%-aql$") then
+        return json_response({ result = { 3 }, hasMore = false })
+      end
+      return json_response({ result = { 1, 2 }, count = 3, hasMore = true, id = "cursor-aql" }, 201)
+    end, function(client)
+      local validated
+      client.validate_aql_async(config, "RETURN @value", function(err, data)
+        assert(not err, tostring(err))
+        validated = data
+      end)
+      assert(vim.wait(1000, function()
+        return validated ~= nil
+      end))
+      h.eq(true, validated.parsed)
+
+      local explained
+      client.explain_aql_async(config, "RETURN @value", { value = 42 }, function(err, data)
+        assert(not err, tostring(err))
+        explained = data
+      end)
+      assert(vim.wait(1000, function()
+        return explained ~= nil
+      end))
+
+      local first
+      client.execute_aql_async(config, "RETURN @value", { value = 42 }, {
+        batch_size = 2,
+        cursor_ttl = 90,
+        profile = true,
+        max_runtime = 5,
+      }, function(err, data)
+        assert(not err, tostring(err))
+        first = data
+      end)
+      assert(vim.wait(1000, function()
+        return first ~= nil
+      end))
+
+      local second
+      client.next_aql_page_async(config, first.id, function(err, data)
+        assert(not err, tostring(err))
+        second = data
+      end)
+      assert(vim.wait(1000, function()
+        return second ~= nil
+      end))
+      h.eq({ 3 }, second.result)
+    end)
+
+    local validation = vim.json.decode(requests[1].body)
+    h.eq("RETURN @value", validation.query)
+    h.eq(nil, validation.bindVars)
+    local explanation = vim.json.decode(requests[2].body)
+    h.eq(42, explanation.bindVars.value)
+    local execution = vim.json.decode(requests[3].body)
+    h.eq(2, execution.batchSize)
+    h.eq(90, execution.ttl)
+    h.eq(2, execution.options.profile)
+    h.eq(5, execution.options.maxRuntime)
+    h.eq("POST", requests[4].method)
+    h.matches("/_api/cursor/cursor%-aql$", requests[4].path)
+  end),
+
+  h.test("missing AQL cursor ids fail asynchronously", function()
+    with_client(function()
+      return json_response({})
+    end, function(client)
+      local received
+      client.next_aql_page_async(config, nil, function(err)
+        received = err
+      end)
+      assert(vim.wait(1000, function()
+        return received ~= nil
+      end))
+      h.eq(true, require("arangodb.errors").is(received, "protocol"))
+    end)
+  end),
+
+  h.test("successful AQL writes invalidate cached metadata", function()
+    local collection_calls = 0
+    with_client(function(opts)
+      if opts.path:match("/_api/collection$") then
+        collection_calls = collection_calls + 1
+        return json_response({ result = { { name = "items", type = 2, status = 3 } } })
+      end
+      return json_response({ result = {}, hasMore = false }, 201)
+    end, function(client)
+      client.list_collection_details(config)
+      client.list_collection_details(config)
+      h.eq(1, collection_calls)
+
+      local completed = false
+      client.execute_aql_async(config, "UPDATE {} IN items", {}, { modification = true }, function(err)
+        assert(not err, tostring(err))
+        completed = true
+      end)
+      assert(vim.wait(1000, function()
+        return completed
+      end))
+      client.list_collection_details(config)
+      h.eq(2, collection_calls)
+    end)
+  end),
+
   h.test("metadata uses the TTL cache and figures stay lazy", function()
     local collection_calls = 0
     local figure_calls = 0

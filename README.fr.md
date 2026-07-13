@@ -11,6 +11,7 @@ Parcourez, modifiez et administrez vos données ArangoDB sans quitter Neovim.
 
 - Navigation dans les bases, collections et documents avec `snacks.nvim`.
 - Recherche sur les champs échantillonnés avec pages AQL asynchrones basées sur des curseurs.
+- Écriture, validation, explication, exécution et profilage AQL dans des buffers dédiés.
 - Édition avec `:write` et résolution des conflits concurrents sur `_rev`.
 - Création et duplication de documents sous forme de brouillons avant insertion.
 - Création, duplication, renommage et troncature des collections de documents ou d’arêtes.
@@ -61,6 +62,29 @@ require("arangodb").setup({
     delete = nil,
     duplicate = nil,
     related = nil,
+  },
+  aql_keymaps = {
+    execute = "<leader>ar",
+    validate = "<leader>av",
+    explain = "<leader>ae",
+    profile = "<leader>ap",
+    bind_vars = "<leader>ab",
+    history = "<leader>ah",
+    cancel = "<leader>ac",
+    next_page = "<C-n>",
+    prev_page = "<C-p>",
+  },
+  aql = {
+    batch_size = 100,
+    cursor_ttl = 300,
+    max_runtime = nil,
+    result_split = "auto",
+    history = {
+      enabled = true,
+      max_entries = 100,
+      path = nil,
+      store_bind_vars = true,
+    },
   },
   layout = { preset = "auto", preview = true },
   page_size = 50,
@@ -125,6 +149,8 @@ Pour une autorité de certification privée, utilisez `tls_ca_file`. Désactiver
 :ArangoBrowse ma_base
 :ArangoResume
 :ArangoBack
+:ArangoAql
+:ArangoAql ma_base
 ```
 
 Dans un buffer de document :
@@ -136,6 +162,37 @@ Dans un buffer de document :
 :ArangoDocumentDelete
 :ArangoDocumentRelated
 ```
+
+Dans un éditeur ouvert par `:ArangoAql` :
+
+```vim
+:ArangoAqlExecute
+:ArangoAqlValidate
+:ArangoAqlExplain
+:ArangoAqlProfile
+:ArangoAqlBindVars
+:ArangoAqlHistory
+:ArangoAqlCancel
+```
+
+La requête utilise le filetype `aql`. Le buffer JSON non listé associé aux bind variables s’ouvre automatiquement en dessous tandis que le focus reste sur la requête ; sélectionner un autre buffer de requête AQL dans la barre de buffers remplace automatiquement le split associé par les variables de cette session. Les commandes AQL ci-dessus et leurs raccourcis en mode normal sont disponibles depuis les deux buffers et ciblent toujours la requête associée ; les raccourcis sur sélection visuelle restent limités au buffer AQL. Une variable de collection `@@collection` utilise par exemple la clé `"@collection"`. Si l’onglet courant contient déjà une session AQL, `:ArangoAql` ouvre la suivante dans un nouvel onglet plutôt que d’empiler ses splits. Les résultats restent associés à leur session et apparaissent dans un split JSON en lecture seule, à droite sur écran large et en dessous sur écran étroit. Les pages déjà visitées restent en cache local.
+
+L’exécution et le profilage demandent d’abord le plan optimisé à ArangoDB. Une requête dont `plan.isModificationQuery = true` exige une confirmation explicite affichant la base et les collections modifiées. Explain et validation n’exécutent jamais la requête.
+
+L’historique est recherchable avec `snacks.nvim` et stocké par défaut dans `stdpath("data") .. "/arangodb.nvim/aql_history.json"` avec des permissions réservées à l’utilisateur. Il ne contient jamais URL, identifiants, résultats ou erreurs. Les requêtes et bind variables peuvent néanmoins être sensibles ; utilisez `aql.history.enabled = false` ou `store_bind_vars = false` si nécessaire. Après la désactivation de `store_bind_vars`, la prochaine écriture de l’historique supprime aussi les bind variables des entrées conservées.
+
+Raccourcis par défaut dans les buffers AQL :
+
+| Touche | Action |
+| --- | --- |
+| `<leader>ar` | Exécuter la requête ou la sélection visuelle |
+| `<leader>av` | Valider sans exécution |
+| `<leader>ae` | Expliquer sans exécution |
+| `<leader>ap` | Exécuter avec profilage |
+| `<leader>ab` | Modifier les bind variables |
+| `<leader>ah` | Parcourir l’historique local |
+| `<leader>ac` | Annuler et fermer le curseur actif |
+| `<C-p>` / `<C-n>` | Page de résultat précédente / suivante |
 
 Touches par défaut du picker de collections :
 
@@ -173,6 +230,7 @@ La révision `_rev` protège les sauvegardes concurrentes. En cas de conflit, le
 ## Limites
 
 - Les lectures des pickers sont asynchrones ; les commandes de mutation attendent encore la réponse du serveur.
+- L’annulation AQL interrompt la requête locale et ferme les curseurs connus. Sans `aql.max_runtime`, une requête déjà lancée côté serveur peut continuer selon sa configuration.
 - HTTPS nécessite actuellement `curl`.
 - La détection des relations est heuristique.
 - La duplication d’une collection copie ses documents et son type, mais pas ses index, schémas, valeurs calculées ou autres propriétés.

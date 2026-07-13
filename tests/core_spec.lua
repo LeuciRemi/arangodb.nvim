@@ -64,6 +64,18 @@ return {
     h.fails("positive integer", function()
       config.setup({ diagnostics = { max_size = 0 } })
     end)
+    h.fails("aql.batch_size", function()
+      config.setup({ aql = { batch_size = 0 } })
+    end)
+    h.fails("aql.result_split", function()
+      config.setup({ aql = { result_split = "left" } })
+    end)
+    h.fails("aql.max_runtime", function()
+      config.setup({ aql = { max_runtime = -1 } })
+    end)
+    h.fails("aql.history.max_entries", function()
+      config.setup({ aql = { history = { max_entries = 0 } } })
+    end)
     config.setup()
   end),
 
@@ -110,6 +122,11 @@ return {
     arangodb.setup()
     h.eq("User replacement", vim.fn.maparg("<F9>", "n", false, true).desc)
     vim.keymap.del("n", "<F9>")
+  end),
+
+  h.test("commands expose the AQL editor entry point", function()
+    require("arangodb.commands").setup()
+    h.eq(2, vim.fn.exists(":ArangoAql"))
   end),
 
   h.test("JSON formatting is deterministic", function()
