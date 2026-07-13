@@ -638,6 +638,160 @@ function M.database_overview(config, opts)
   return overview
 end
 
+--- Gather database metadata and optional collection figures without blocking the editor.
+function M.database_overview_async(config, opts, callback)
+  if type(opts) == "function" then
+    callback = opts
+    opts = {}
+  end
+  opts = opts or {}
+
+  local cancelled = false
+  local requests = {}
+
+  local function track(request_handle)
+    if request_handle then
+      requests[#requests + 1] = request_handle
+    end
+    return request_handle
+  end
+
+  local function cancel()
+    if cancelled then
+      return
+    end
+    cancelled = true
+    for _, request_handle in ipairs(requests) do
+      if request_handle.cancel then
+        request_handle.cancel()
+      end
+    end
+  end
+
+  local function load_overview(collections)
+    if cancelled then
+      return
+    end
+
+    local overview = {
+      name = config.database,
+      endpoint = string.format("%s:%s", tostring(config.host), tostring(config.port)),
+      collections = vim.deepcopy(collections or {}),
+    }
+    overview.collection_count = #overview.collections
+
+    local include_figures = opts.include_figures == true
+    local pending = 1 + (include_figures and #overview.collections or 0)
+    local total_documents = 0
+    local total_size = 0
+    local has_all_document_counts = true
+    local has_all_sizes = true
+
+    local function complete_one()
+      if cancelled then
+        return
+      end
+      pending = pending - 1
+      if pending > 0 then
+        return
+      end
+
+      if include_figures and has_all_document_counts then
+        overview.total_documents = total_documents
+      end
+      if include_figures and has_all_sizes then
+        overview.total_size = total_size
+      end
+      callback(nil, overview)
+    end
+
+    track(database_request_async(config, "GET", "/_api/database/current", nil, function(err, current)
+      if cancelled then
+        return
+      end
+      if err then
+        overview.info_error = trim_message(err)
+      elseif type(current) == "table" and type(current.result) == "table" then
+        local info = current.result
+        overview.id = info.id
+        overview.path = info.path
+        overview.is_system = info.isSystem == true
+        overview.sharding = info.sharding
+        overview.replication_factor = info.replicationFactor
+        overview.write_concern = info.writeConcern
+      end
+      complete_one()
+    end))
+
+    if not include_figures then
+      return
+    end
+
+    local next_collection = 1
+    local active_metrics = 0
+    local max_concurrent_metrics = 4
+
+    local function load_next_metrics()
+      if cancelled then
+        return
+      end
+      while active_metrics < max_concurrent_metrics and next_collection <= #overview.collections do
+        local item = overview.collections[next_collection]
+        next_collection = next_collection + 1
+        active_metrics = active_metrics + 1
+
+        track(M.collection_metrics_async(config, item.name, function(err, metrics)
+          if cancelled then
+            return
+          end
+          active_metrics = active_metrics - 1
+          if err then
+            item.figures_error = trim_message(err)
+            has_all_document_counts = false
+            has_all_sizes = false
+          else
+            item.count = metrics.count
+            item.size = metrics.size
+            item.engine = metrics.engine
+
+            if type(metrics.count) == "number" then
+              total_documents = total_documents + metrics.count
+            else
+              has_all_document_counts = false
+            end
+            if type(metrics.size) == "number" then
+              total_size = total_size + metrics.size
+            else
+              has_all_sizes = false
+            end
+          end
+          complete_one()
+          load_next_metrics()
+        end))
+      end
+    end
+
+    load_next_metrics()
+  end
+
+  if opts.collections ~= nil then
+    load_overview(opts.collections)
+  else
+    track(M.list_collection_details_async(config, function(err, collections)
+      if cancelled then
+        return
+      end
+      if err then
+        callback(err)
+        return
+      end
+      load_overview(collections)
+    end))
+  end
+
+  return { cancel = cancel }
+end
+
 --- Fetch the expensive figures for one collection on demand.
 function M.collection_metrics(config, collection)
   local key = cache_key(config, "metrics:" .. collection)

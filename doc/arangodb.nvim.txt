@@ -202,7 +202,9 @@ aql_batch_size ~
 
 cache_ttl ~
     Lifetime in milliseconds for cached collection metadata, sampled fields,
-    and figures. Set to 0 to disable caching.
+    and figures. Set to 0 to disable caching. Collection previews load
+    per-collection figures and database-wide document and approximate-size
+    totals in the background.
 
 default_sort ~
     AQL sort expression used by document and relation listings.

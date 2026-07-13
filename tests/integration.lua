@@ -55,6 +55,21 @@ local ok, err = xpcall(function()
   assert(#page.items == 1)
   assert(page.items[1].id == created.id)
 
+  local overview = await(function(done)
+    client.database_overview_async(config, { include_figures = true }, done)
+  end)
+  local source_metrics
+  for _, collection in ipairs(overview.collections) do
+    if collection.name == source then
+      source_metrics = collection
+      break
+    end
+  end
+  assert(source_metrics and source_metrics.count == 1, "database overview did not load collection figures")
+  assert(type(source_metrics.size) == "number", "database overview did not load the collection size")
+  assert(overview.total_documents >= 1, "database overview did not aggregate document counts")
+  assert(overview.total_size >= source_metrics.size, "database overview did not aggregate collection sizes")
+
   local validation = await(function(done)
     client.validate_aql_async(config, "RETURN @value", done)
   end)

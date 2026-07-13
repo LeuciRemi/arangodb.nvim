@@ -105,7 +105,7 @@ Toutes les options et leurs valeurs par défaut figurent dans le [README anglais
 
 `auto_discover` est volontairement désactivé par défaut. Lorsqu’il est activé, le plugin interroge `/_api/database/user` avec les variables `NVIM_ARANGO_HOST`, port, schéma et identifiants. Aucun accès réseau implicite n’a donc lieu pendant la complétion des commandes ou le healthcheck.
 
-Les métadonnées, champs échantillonnés et métriques utilisent un cache court contrôlé par `cache_ttl` (`0` le désactive). Le journal de diagnostic facultatif écrit des événements JSONL nettoyés, sans identifiants, headers ou corps de requête. Son chemin par défaut est `stdpath("log") .. "/arangodb.nvim.log"`.
+Les métadonnées, champs échantillonnés et métriques utilisent un cache court contrôlé par `cache_ttl` (`0` le désactive). Les aperçus de collection chargent en arrière-plan les métriques de chaque collection ainsi que les totaux de documents et de taille approximative de la base. Le journal de diagnostic facultatif écrit des événements JSONL nettoyés, sans identifiants, headers ou corps de requête. Son chemin par défaut est `stdpath("log") .. "/arangodb.nvim.log"`.
 
 ## Connexions et identifiants
 
