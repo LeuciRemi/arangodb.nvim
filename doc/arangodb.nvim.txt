@@ -9,10 +9,11 @@ CONTENTS                                                *arangodb.nvim-contents*
 4. Configuration ....................................... |arangodb.nvim-configuration|
 5. Connections ......................................... |arangodb.nvim-connections|
 6. Commands ............................................ |arangodb.nvim-commands|
-7. Picker mappings ..................................... |arangodb.nvim-mappings|
-8. Lua API ............................................. |arangodb.nvim-api|
-9. Health check ........................................ |arangodb.nvim-health|
-10. Development and limitations ........................ |arangodb.nvim-development|
+7. AQL editor .......................................... |arangodb.nvim-aql|
+8. Picker mappings ..................................... |arangodb.nvim-mappings|
+9. Lua API ............................................. |arangodb.nvim-api|
+10. Health check ....................................... |arangodb.nvim-health|
+11. Development and limitations ........................ |arangodb.nvim-development|
 
 ===============================================================================
 INTRODUCTION                                              *arangodb.nvim-intro*
@@ -21,6 +22,7 @@ arangodb.nvim provides a picker-based interface for ArangoDB. It can:
 
 - browse databases, collections, and cursor-paginated documents asynchronously
 - search sampled document fields
+- edit, validate, explain, execute, and profile AQL queries
 - edit JSON documents, save with |:write|, and resolve revision conflicts
 - create and duplicate draft documents
 - create, duplicate, rename, and truncate collections
@@ -96,6 +98,29 @@ Call setup() once after installing the plugin:
       duplicate = nil,
       related = nil,
     },
+    aql_keymaps = {
+      execute = "<leader>ar",
+      validate = "<leader>av",
+      explain = "<leader>ae",
+      profile = "<leader>ap",
+      bind_vars = "<leader>ab",
+      history = "<leader>ah",
+      cancel = "<leader>ac",
+      next_page = "<C-n>",
+      prev_page = "<C-p>",
+    },
+    aql = {
+      batch_size = 100,
+      cursor_ttl = 300,
+      max_runtime = nil,
+      result_split = "auto",
+      history = {
+        enabled = true,
+        max_entries = 100,
+        path = nil,
+        store_bind_vars = true,
+      },
+    },
 
     layout = { preset = "auto", preview = true },
     field_sample_size = 200,
@@ -143,6 +168,15 @@ document_keymaps ~
     Buffer-local mappings for save, delete, duplicate, and related. They are
     unset by default. The corresponding commands are always created.
 
+aql_keymaps ~
+    Buffer-local AQL editor and result mappings. Any value may be false. No
+    global AQL mapping is installed.
+
+aql ~
+    AQL editor settings. batch_size controls cursor pages, cursor_ttl is in
+    seconds, and max_runtime is nil to use the server default. result_split is
+    auto, right, or bottom. history configures the private local query history.
+
 layout ~
     snacks.nvim picker layout. preset = "auto" uses a side-by-side layout on
     wide screens and a stacked layout on smaller screens. preview controls the
@@ -187,7 +221,6 @@ tls_ca_file ~
 
 diagnostics ~
     Optional sanitized JSON-lines request journal. enabled activates it, path
-    overrides stdpath("log")/arangodb.nvim.log, and max_size rotates the file.
     Credentials, headers, and request bodies are never written.
 
 ===============================================================================
@@ -237,6 +270,10 @@ COMMANDS                                              *arangodb.nvim-commands*
 :ArangoBack
     Return to the previous picker or document route.
 
+                                                          *:ArangoAql*
+:ArangoAql [database]
+    Open a new AQL editor. A database argument skips database selection.
+
                                                 *:ArangoDocumentSave*
 :ArangoDocumentSave
     Save the current document. A draft is inserted on its first save. |:write|
@@ -255,6 +292,67 @@ COMMANDS                                              *arangodb.nvim-commands*
                                              *:ArangoDocumentRelated*
 :ArangoDocumentRelated
     Pick a direct, nested, or inferred reverse relation from the document.
+
+===============================================================================
+AQL EDITOR                                                *arangodb.nvim-aql*
+
+Every |:ArangoAql| call creates a separate, listed query buffer with the aql
+filetype. If the current tab page already contains an AQL session, the next
+session opens in a new tab page instead of stacking its splits. Results stay
+with their session and open in a read-only JSON split on the right of a wide
+screen or below the query on a narrow screen. The companion JSON bind-variable
+buffer is unlisted and opens automatically below the query while focus stays
+on the query. Selecting another listed AQL query buffer automatically switches
+the companion split to that session's variables. The commands below and their
+normal-mode mappings are available from both buffers and always target the
+associated query. Visual-selection mappings remain query-only.
+Collection bind variables such as @@collection use a key such as
+"@collection".
+
+The following commands are local to AQL query buffers:
+
+                                                        *:ArangoAqlExecute*
+:ArangoAqlExecute
+    Explain and execute the entire query or command range. A modification plan
+    requires explicit confirmation before execution.
+
+                                                       *:ArangoAqlValidate*
+:ArangoAqlValidate
+    Parse and validate the query without executing it.
+
+                                                        *:ArangoAqlExplain*
+:ArangoAqlExplain
+    Show the optimized execution plan without executing the query.
+
+                                                        *:ArangoAqlProfile*
+:ArangoAqlProfile
+    Execute with profile level 2 and include the plan and node statistics.
+    Modification queries require the same confirmation as Execute.
+
+                                                       *:ArangoAqlBindVars*
+:ArangoAqlBindVars
+    Open the associated JSON bind-variable buffer. |:write| validates it.
+
+                                                        *:ArangoAqlHistory*
+:ArangoAqlHistory
+    Search local query history with snacks.nvim and restore an entry without
+    executing it.
+
+                                                         *:ArangoAqlCancel*
+:ArangoAqlCancel
+    Cancel the local request and close a known server cursor.
+
+                                                   *:ArangoAqlNextPage*
+                                                  *:ArangoAqlPrevPage*
+Result buffers provide :ArangoAqlNextPage and :ArangoAqlPrevPage. Previous
+pages are cached locally and do not trigger another network request.
+
+History defaults to stdpath("data")/arangodb.nvim/aql_history.json, is limited
+to 100 entries, and is written with user-only permissions. It excludes URLs,
+credentials, results, and errors. Query text and bind variables may themselves
+be sensitive; disable history or store_bind_vars when appropriate. After
+store_bind_vars is disabled, the next history write also removes bind variables
+from retained entries.
 
 ===============================================================================
 PICKER MAPPINGS                                      *arangodb.nvim-mappings*
@@ -294,6 +392,7 @@ LUA API                                                    *arangodb.nvim-api*
 >lua
   require("arangodb").setup(opts)
   require("arangodb").browse({ database = "work" })
+  require("arangodb").aql({ database = "work", query = "RETURN 1" })
   require("arangodb").resume()
   require("arangodb").back()
 <
@@ -324,6 +423,8 @@ Developer commands:
 
 Picker reads are asynchronous and cancellable, and document pagination uses
 ArangoDB cursors. Explicit mutation commands wait for their server response.
+Cancelling AQL closes known cursors and stops the local request. Without an
+aql.max_runtime value, an already running server query follows server limits.
 HTTPS requires curl. Relation detection is heuristic. Collection duplication
 copies documents and collection type, but not indexes, schemas, computed values,
 or other collection properties.

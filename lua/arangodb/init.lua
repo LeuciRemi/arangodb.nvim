@@ -67,4 +67,9 @@ function M.back()
   return require("arangodb.browser").back()
 end
 
+--- Open a new interactive AQL editor session.
+function M.aql(opts)
+  return require("arangodb.aql").open(opts)
+end
+
 return M

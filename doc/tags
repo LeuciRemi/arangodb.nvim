@@ -1,3 +1,13 @@
+:ArangoAql	arangodb.nvim.txt	/*:ArangoAql*
+:ArangoAqlBindVars	arangodb.nvim.txt	/*:ArangoAqlBindVars*
+:ArangoAqlCancel	arangodb.nvim.txt	/*:ArangoAqlCancel*
+:ArangoAqlExecute	arangodb.nvim.txt	/*:ArangoAqlExecute*
+:ArangoAqlExplain	arangodb.nvim.txt	/*:ArangoAqlExplain*
+:ArangoAqlHistory	arangodb.nvim.txt	/*:ArangoAqlHistory*
+:ArangoAqlNextPage	arangodb.nvim.txt	/*:ArangoAqlNextPage*
+:ArangoAqlPrevPage	arangodb.nvim.txt	/*:ArangoAqlPrevPage*
+:ArangoAqlProfile	arangodb.nvim.txt	/*:ArangoAqlProfile*
+:ArangoAqlValidate	arangodb.nvim.txt	/*:ArangoAqlValidate*
 :ArangoBack	arangodb.nvim.txt	/*:ArangoBack*
 :ArangoBrowse	arangodb.nvim.txt	/*:ArangoBrowse*
 :ArangoDocumentDelete	arangodb.nvim.txt	/*:ArangoDocumentDelete*
@@ -6,6 +16,7 @@
 :ArangoDocumentSave	arangodb.nvim.txt	/*:ArangoDocumentSave*
 :ArangoResume	arangodb.nvim.txt	/*:ArangoResume*
 arangodb.nvim-api	arangodb.nvim.txt	/*arangodb.nvim-api*
+arangodb.nvim-aql	arangodb.nvim.txt	/*arangodb.nvim-aql*
 arangodb.nvim-commands	arangodb.nvim.txt	/*arangodb.nvim-commands*
 arangodb.nvim-configuration	arangodb.nvim.txt	/*arangodb.nvim-configuration*
 arangodb.nvim-connections	arangodb.nvim.txt	/*arangodb.nvim-connections*

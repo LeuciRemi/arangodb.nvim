@@ -109,3 +109,38 @@ assert(
   end),
   "Snacks document picker did not load a cursor page asynchronously"
 )
+
+require("snacks.picker.core.picker").get()[1]:close()
+package.loaded["arangodb.aql_history"] = {
+  load = function()
+    return {
+      {
+        timestamp = "2026-01-01T00:00:00Z",
+        connection = "test",
+        database = "test",
+        query = "RETURN 1",
+        bind_vars = {},
+      },
+    }
+  end,
+  add = function() end,
+}
+package.loaded["arangodb.aql"] = nil
+local session = require("arangodb.aql").open({
+  config = database,
+  connection = "test",
+  query = "RETURN 1",
+})
+vim.api.nvim_buf_call(session.query_buf, function()
+  vim.cmd("ArangoAqlHistory")
+end)
+
+assert(
+  vim.wait(1000, function()
+    local pickers = require("snacks.picker.core.picker").get()
+    return #pickers == 1 and pickers[1].finder:count() == 1
+  end),
+  "Snacks AQL history picker did not load"
+)
+require("snacks.picker.core.picker").get()[1]:close()
+vim.api.nvim_buf_delete(session.query_buf, { force = true })

@@ -50,6 +50,18 @@ function M.setup()
   end, {
     desc = "Go back to the previous ArangoDB view",
   })
+
+  vim.api.nvim_create_user_command("ArangoAql", function(opts)
+    local options = {}
+    if opts.args ~= "" then
+      options.database = opts.args
+    end
+    require("arangodb").aql(options)
+  end, {
+    nargs = "?",
+    complete = complete_databases,
+    desc = "Open a new ArangoDB AQL editor",
+  })
 end
 
 return M

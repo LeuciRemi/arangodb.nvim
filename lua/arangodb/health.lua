@@ -50,6 +50,15 @@ function M.check()
   if config.diagnostics and config.diagnostics.enabled == true then
     info("diagnostic path: `" .. require("arangodb.diagnostics").path() .. "`")
   end
+  local aql = config.aql or {}
+  local aql_history = aql.history or {}
+  info("AQL batch size: `" .. tostring(aql.batch_size or 100) .. "`")
+  info("AQL cursor ttl: `" .. tostring(aql.cursor_ttl or 300) .. "s`")
+  info("AQL max runtime: `" .. tostring(aql.max_runtime or "server default") .. "`")
+  info("AQL history: `" .. tostring(aql_history.enabled ~= false) .. "`")
+  if aql_history.enabled ~= false then
+    info("AQL history path: `" .. require("arangodb.aql_history").path() .. "`")
+  end
   if type(config.tls_ca_file) == "string" and config.tls_ca_file ~= "" then
     info("tls ca file: `" .. config.tls_ca_file .. "`")
     if vim.fn.filereadable(config.tls_ca_file) ~= 1 then

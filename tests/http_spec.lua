@@ -106,6 +106,57 @@ return {
     h.eq(0, vim.fn.filereadable(header_file))
   end),
 
+  h.test("asynchronous HTTPS requests can start from a fast event", function()
+    local original_system = vim.system
+    local callback_error
+    local response
+    local was_fast_event
+
+    vim.system = function(_, _, callback)
+      vim.schedule(function()
+        callback({
+          stdout = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}",
+          stderr = "",
+          code = 0,
+        })
+      end)
+      return { kill = function() end }
+    end
+
+    local ok, result = xpcall(function()
+      package.loaded["arangodb.http"] = nil
+      local uv = vim.uv or vim.loop
+      local timer = assert(uv.new_timer())
+      timer:start(0, 0, function()
+        timer:stop()
+        timer:close()
+        was_fast_event = vim.in_fast_event()
+        require("arangodb.http").request_async({
+          scheme = "https",
+          host = "localhost",
+          port = 8529,
+          path = "/_db/configured/_api/collection",
+        }, function(err, value)
+          callback_error = err
+          response = value
+        end)
+      end)
+
+      assert(vim.wait(1000, function()
+        return callback_error ~= nil or response ~= nil
+      end))
+      h.eq(true, was_fast_event)
+      h.eq(nil, callback_error)
+      h.eq(200, response.status)
+    end, debug.traceback)
+
+    vim.system = original_system
+    package.loaded["arangodb.http"] = nil
+    if not ok then
+      error(result, 0)
+    end
+  end),
+
   h.test("diagnostic journal records sanitized request metadata", function()
     local original_system = vim.system
     local log_path = vim.fn.tempname()
@@ -147,5 +198,44 @@ return {
     h.eq(nil, contents:find("reader", 1, true))
     h.eq(nil, contents:find("very-secret", 1, true))
     vim.fn.delete(log_path)
+  end),
+
+  h.test("diagnostic failures never prevent request completion", function()
+    local original_system = vim.system
+    local original_diagnostics = package.loaded["arangodb.diagnostics"]
+    vim.system = function(_, _, callback)
+      vim.schedule(function()
+        callback({
+          stdout = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}",
+          stderr = "",
+          code = 0,
+        })
+      end)
+      return { kill = function() end }
+    end
+    package.loaded["arangodb.diagnostics"] = {
+      record = function()
+        error("diagnostic disk unavailable")
+      end,
+    }
+    package.loaded["arangodb.http"] = nil
+
+    local ok, result = xpcall(function()
+      return require("arangodb.http").request({
+        scheme = "https",
+        host = "localhost",
+        port = 8529,
+        path = "/_api/version",
+        timeout = 100,
+      })
+    end, debug.traceback)
+
+    vim.system = original_system
+    package.loaded["arangodb.http"] = nil
+    package.loaded["arangodb.diagnostics"] = original_diagnostics
+    if not ok then
+      error(result, 0)
+    end
+    h.eq(200, result.status)
   end),
 }

@@ -19,15 +19,31 @@ local function cache_ttl()
   return plugin_options().cache_ttl or 0
 end
 
+-- Keep credentials out of cache keys without calling Vimscript functions. Client
+-- requests may start from a Snacks/libuv fast event, where vim.fn.sha256() is not
+-- allowed. Two independent 32-bit rolling hashes are sufficient for this
+-- process-local cache namespace and remain stable in every Neovim context.
+local function credential_fingerprint(value)
+  value = tostring(value)
+  local first = 5381
+  local second = 2166136261
+  for index = 1, #value do
+    local byte = value:byte(index)
+    first = (first * 33 + byte) % 4294967296
+    second = (second * 65599 + byte) % 4294967296
+  end
+  return string.format("%08x%08x", first, second)
+end
+
 local function connection_cache_prefix(config)
-  local credential_fingerprint = config.password and vim.fn.sha256(tostring(config.password)):sub(1, 16) or ""
+  local password_fingerprint = config.password and credential_fingerprint(config.password) or ""
   return table.concat({
     tostring(config.scheme),
     tostring(config.host),
     tostring(config.port),
     tostring(config.database),
     tostring(config.user),
-    credential_fingerprint,
+    password_fingerprint,
   }, "\0") .. "\0"
 end
 
@@ -853,6 +869,63 @@ function M.close_cursor_async(config, cursor_id)
     return
   end
   database_request_async(config, "DELETE", "/_api/cursor/" .. core.url_encode(cursor_id), nil, function() end)
+end
+
+local function optional_bind_vars(payload, bind_vars)
+  if type(bind_vars) == "table" and not vim.tbl_isempty(bind_vars) then
+    payload.bindVars = bind_vars
+  end
+  return payload
+end
+
+--- Validate an AQL query without executing it.
+function M.validate_aql_async(config, query, callback)
+  return database_request_async(config, "POST", "/_api/query", { query = query }, callback)
+end
+
+--- Return the optimized execution plan for an AQL query without executing it.
+function M.explain_aql_async(config, query, bind_vars, callback)
+  local payload = optional_bind_vars({ query = query }, bind_vars)
+  return database_request_async(config, "POST", "/_api/explain", payload, callback)
+end
+
+--- Execute an AQL query and return its first cursor page without blocking Neovim.
+function M.execute_aql_async(config, query, bind_vars, opts, callback)
+  opts = opts or {}
+  local payload = optional_bind_vars({
+    query = query,
+    batchSize = math.max(tonumber(opts.batch_size) or 100, 1),
+    count = true,
+    ttl = math.max(tonumber(opts.cursor_ttl) or 300, 1),
+  }, bind_vars)
+  local query_options = {}
+  if opts.profile == true then
+    query_options.profile = 2
+  end
+  if type(opts.max_runtime) == "number" then
+    query_options.maxRuntime = opts.max_runtime
+  end
+  if not vim.tbl_isempty(query_options) then
+    payload.options = query_options
+  end
+
+  return database_request_async(config, "POST", "/_api/cursor", payload, function(err, data)
+    if not err and opts.modification == true then
+      invalidate_cache(config)
+    end
+    callback(err, data)
+  end)
+end
+
+--- Read the next page from an AQL cursor.
+function M.next_aql_page_async(config, cursor_id, callback)
+  if type(cursor_id) ~= "string" or cursor_id == "" then
+    vim.schedule(function()
+      callback(errors.new({ kind = "protocol", message = "Missing ArangoDB AQL cursor id" }))
+    end)
+    return { cancel = function() end }
+  end
+  return database_request_async(config, "POST", "/_api/cursor/" .. core.url_encode(cursor_id), nil, callback)
 end
 
 --- Delete a document by id and return the ArangoDB response metadata.
