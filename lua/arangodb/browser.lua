@@ -1989,13 +1989,18 @@ browse_collections = function(config, opts, prev_picker)
   local meta = {
     search = opts.search or "",
     collection_count = 0,
+    collections = {},
     overview = {
       name = config.database,
       endpoint = string.format("%s:%s", tostring(config.host), tostring(config.port)),
     },
     collection_lookup = {},
+    overview_loaded = false,
+    overview_loading = false,
+    overview_waiters = {},
   }
   local preview_request
+  local overview_request
 
   local function current_search(current)
     if current and current.input and current.input.filter and type(current.input.filter.search) == "string" then
@@ -2005,15 +2010,33 @@ browse_collections = function(config, opts, prev_picker)
   end
 
   local function clear_collection_overview()
+    if preview_request and preview_request.cancel then
+      preview_request.cancel()
+    end
+    if overview_request and overview_request.cancel then
+      overview_request.cancel()
+    end
+    preview_request = nil
+    overview_request = nil
+    meta.collections = {}
     meta.collection_lookup = {}
+    meta.overview = {
+      name = config.database,
+      endpoint = string.format("%s:%s", tostring(config.host), tostring(config.port)),
+    }
+    meta.overview_loaded = false
+    meta.overview_loading = false
+    meta.overview_waiters = {}
   end
 
   local function collection_items(collections, search)
     meta.collection_count = #collections
     meta.overview.collection_count = #collections
+    meta.collections = collections
+    local previous_lookup = meta.collection_lookup
     meta.collection_lookup = {}
     for _, item in ipairs(collections) do
-      meta.collection_lookup[item.name] = item
+      meta.collection_lookup[item.name] = vim.tbl_extend("force", {}, item, previous_lookup[item.name] or {})
     end
 
     local query = string.lower(vim.trim(search or ""))
@@ -2040,6 +2063,41 @@ browse_collections = function(config, opts, prev_picker)
     return items
   end
 
+  local function ensure_database_overview(render)
+    if meta.overview_loaded then
+      return
+    end
+
+    meta.overview_waiters[#meta.overview_waiters + 1] = render
+    if meta.overview_loading then
+      return
+    end
+
+    meta.overview_loading = true
+    overview_request = client.database_overview_async(config, {
+      collections = meta.collections,
+      include_figures = true,
+    }, function(err, overview)
+      meta.overview_loading = false
+      overview_request = nil
+      if not err and overview then
+        meta.overview = overview
+        meta.collection_count = overview.collection_count or meta.collection_count
+        for _, details in ipairs(overview.collections or {}) do
+          meta.collection_lookup[details.name] =
+            vim.tbl_extend("force", meta.collection_lookup[details.name] or { name = details.name }, details)
+        end
+        meta.overview_loaded = true
+      end
+
+      local waiters = meta.overview_waiters
+      meta.overview_waiters = {}
+      for _, waiter in ipairs(waiters) do
+        waiter()
+      end
+    end)
+  end
+
   local function preview_collection(ctx)
     local collection = ctx.item and ctx.item.item and ctx.item.item.name
     if not collection then
@@ -2050,10 +2108,14 @@ browse_collections = function(config, opts, prev_picker)
     end
 
     local function render()
+      if not ctx.preview.item or not ctx.preview.item.item or ctx.preview.item.item.name ~= collection then
+        return
+      end
       ctx.preview:reset()
       ctx.preview:set_lines(vim.split(collection_preview_text(config, collection, meta), "\n", { plain = true }))
     end
     render()
+    ensure_database_overview(render)
 
     preview_request = client.collection_metrics_async(config, collection, function(err, metrics)
       if err or not ctx.preview.item or not ctx.preview.item.item or ctx.preview.item.item.name ~= collection then
@@ -2198,6 +2260,9 @@ browse_collections = function(config, opts, prev_picker)
     on_close = function()
       if preview_request and preview_request.cancel then
         preview_request.cancel()
+      end
+      if overview_request and overview_request.cancel then
+        overview_request.cancel()
       end
       if state.picker == picker then
         state.picker = nil

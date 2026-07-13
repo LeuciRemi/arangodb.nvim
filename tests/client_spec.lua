@@ -366,6 +366,43 @@ return {
     end)
   end),
 
+  h.test("async database overview aggregates collection counts and sizes", function()
+    with_client(function(opts)
+      if opts.path:match("/figures$") then
+        local collection = opts.path:match("/_api/collection/([^/]+)/figures$")
+        if collection == "items" then
+          return json_response({ count = 4, figures = { documentsSize = 100, indexes = { size = 20 } } })
+        end
+        return json_response({ count = 3, figures = { documentsSize = 50, indexSize = 10 } })
+      end
+      if opts.path:match("/_api/collection$") then
+        return json_response({
+          result = {
+            { name = "items", type = 2, status = 3 },
+            { name = "links", type = 3, status = 3 },
+          },
+        })
+      end
+      return json_response({ result = { name = "test", path = "/data/test" } })
+    end, function(client)
+      local received
+      client.database_overview_async(config, { include_figures = true }, function(err, overview)
+        assert(not err, tostring(err))
+        received = overview
+      end)
+
+      assert(vim.wait(1000, function()
+        return received ~= nil
+      end))
+      h.eq(2, received.collection_count)
+      h.eq(7, received.total_documents)
+      h.eq(180, received.total_size)
+      h.eq(4, received.collections[1].count)
+      h.eq(120, received.collections[1].size)
+      h.eq("/data/test", received.path)
+    end)
+  end),
+
   h.test("escaped field paths distinguish literal dots from nested fields", function()
     local queries = {}
     with_client(function(opts)

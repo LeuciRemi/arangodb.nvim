@@ -152,7 +152,7 @@ Set any keymap to `false` to disable it. Global keymaps are unset by default so 
 
 `auto_discover` is deliberately disabled by default. When enabled, the plugin queries `/_api/database/user` using the `NVIM_ARANGO_HOST`, port, scheme, and credential variables. This avoids unexpected network requests during command completion and health checks.
 
-Collection metadata, sampled fields, and figures use the short `cache_ttl` cache. Set it to `0` to disable caching. The optional diagnostic journal writes sanitized JSON-lines request metadata, never credentials, headers, or request bodies. Its default path is `stdpath("log") .. "/arangodb.nvim.log"`.
+Collection metadata, sampled fields, and figures use the short `cache_ttl` cache. Set it to `0` to disable caching. Collection previews load per-collection figures and database-wide document and approximate-size totals in the background. The optional diagnostic journal writes sanitized JSON-lines request metadata, never credentials, headers, or request bodies. Its default path is `stdpath("log") .. "/arangodb.nvim.log"`.
 
 ## Connections and credentials
 

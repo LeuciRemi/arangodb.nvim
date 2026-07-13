@@ -26,6 +26,22 @@ package.loaded["arangodb.client"] = {
     end)
     return { cancel = function() end }
   end,
+  database_overview_async = function(_, opts, done)
+    vim.schedule(function()
+      local collections = vim.deepcopy(opts.collections)
+      collections[1].count = 1
+      collections[1].size = 42
+      done(nil, {
+        name = "test",
+        endpoint = "localhost:8529",
+        collection_count = 1,
+        total_documents = 1,
+        total_size = 42,
+        collections = collections,
+      })
+    end)
+    return { cancel = function() end }
+  end,
   database_overview = function()
     return {
       name = "test",
@@ -92,6 +108,29 @@ assert(
     return #pickers == 1 and pickers[1].finder:count() == 1
   end),
   "Snacks collection picker did not load asynchronously"
+)
+assert(
+  vim.wait(1000, function()
+    for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+      if vim.api.nvim_buf_is_valid(buf) then
+        local ok, lines = pcall(vim.api.nvim_buf_get_lines, buf, 0, -1, false)
+        if ok then
+          local text = table.concat(lines, "\n")
+          if
+            text:find("Database", 1, true)
+            and text:match("Documents:%s+1")
+            and text:match("Approx%. size:%s+42 B")
+            and not text:match("Documents:%s+unavailable")
+            and not text:match("Approx%. size:%s+unavailable")
+          then
+            return true
+          end
+        end
+      end
+    end
+    return false
+  end),
+  "Snacks collection preview did not render database totals"
 )
 
 require("snacks.picker.core.picker").get()[1]:close()
