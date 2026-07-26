@@ -494,4 +494,267 @@ return {
     end)
     h.matches("/_api/collection/target$", deleted_path)
   end),
+
+  h.test("cancelled collection duplication rolls back during index creation", function()
+    local deleted_path
+    with_client(function(opts)
+      if opts.path:match("/_api/collection/source/properties$") then
+        return json_response({ waitForSync = true })
+      elseif opts.path:match("/_api/index%?collection=source$") then
+        return json_response({ indexes = { { id = "source/1", type = "persistent", fields = { "email" } } } })
+      elseif opts.method == "GET" and opts.path:match("/_api/collection/source$") then
+        return json_response({ name = "source", type = 2 })
+      elseif opts.method == "POST" and opts.path:match("/_api/collection$") then
+        return json_response({ name = "target", type = 2 })
+      elseif opts.method == "DELETE" then
+        deleted_path = opts.path
+        return json_response({ id = "target" })
+      end
+      error("unexpected request: " .. opts.method .. " " .. opts.path)
+    end, function(client)
+      local index_pending
+      local index_cancelled = false
+      local callback_error
+      client.create_index_async = function(_, _, _, done)
+        index_pending = done
+        return {
+          cancel = function()
+            index_cancelled = true
+          end,
+        }
+      end
+      local task = client.duplicate_collection_async(config, "source", "target", function(err)
+        callback_error = err
+      end)
+      assert(vim.wait(1000, function()
+        return index_pending ~= nil
+      end))
+      task.cancel()
+      assert(vim.wait(1000, function()
+        return deleted_path ~= nil
+      end))
+      h.eq(true, index_cancelled)
+      h.eq(nil, callback_error)
+      h.matches("/_api/collection/target$", deleted_path)
+    end)
+  end),
+
+  h.test("cancelled collection duplication rolls back during the AQL copy", function()
+    local deleted_path
+    with_client(function(opts)
+      if opts.path:match("/_api/collection/source/properties$") then
+        return json_response({})
+      elseif opts.path:match("/_api/index%?collection=source$") then
+        return json_response({ indexes = {} })
+      elseif opts.method == "GET" and opts.path:match("/_api/collection/source$") then
+        return json_response({ name = "source", type = 2 })
+      elseif opts.method == "POST" and opts.path:match("/_api/collection$") then
+        return json_response({ name = "target", type = 2 })
+      elseif opts.method == "DELETE" then
+        deleted_path = opts.path
+        return json_response({ id = "target" })
+      end
+      error("unexpected request: " .. opts.method .. " " .. opts.path)
+    end, function(client)
+      local copy_pending
+      local copy_cancelled = false
+      client.execute_aql_async = function(_, _, _, _, done)
+        copy_pending = done
+        return {
+          cancel = function()
+            copy_cancelled = true
+          end,
+        }
+      end
+      local task = client.duplicate_collection_async(config, "source", "target", function(err)
+        error("successful cancellation must not call back: " .. tostring(err))
+      end)
+      assert(vim.wait(1000, function()
+        return copy_pending ~= nil
+      end))
+      task.cancel()
+      assert(vim.wait(1000, function()
+        return deleted_path ~= nil
+      end))
+      h.eq(true, copy_cancelled)
+      h.matches("/_api/collection/target$", deleted_path)
+    end)
+  end),
+
+  h.test("collection duplication reports cancellation cleanup failures", function()
+    with_client(function(opts)
+      if opts.path:match("/_api/collection/source/properties$") then
+        return json_response({})
+      elseif opts.path:match("/_api/index%?collection=source$") then
+        return json_response({ indexes = {} })
+      elseif opts.method == "GET" and opts.path:match("/_api/collection/source$") then
+        return json_response({ name = "source", type = 2 })
+      elseif opts.method == "POST" and opts.path:match("/_api/collection$") then
+        return json_response({ name = "target", type = 2 })
+      elseif opts.method == "DELETE" then
+        return json_response({ error = true, errorMessage = "rollback denied" }, 403)
+      end
+      error("unexpected request: " .. opts.method .. " " .. opts.path)
+    end, function(client)
+      local copy_pending
+      local callback_error
+      client.execute_aql_async = function(_, _, _, _, done)
+        copy_pending = done
+        return { cancel = function() end }
+      end
+      local task = client.duplicate_collection_async(config, "source", "target", function(err)
+        callback_error = err
+      end)
+      assert(vim.wait(1000, function()
+        return copy_pending ~= nil
+      end))
+      task.cancel()
+      assert(vim.wait(1000, function()
+        return callback_error ~= nil
+      end))
+      h.matches("Collection duplication cancelled", tostring(callback_error))
+      h.matches("cleanup also failed", tostring(callback_error))
+      h.matches("rollback denied", tostring(callback_error))
+    end)
+  end),
+
+  h.test("collection duplication preserves properties and non-system indexes", function()
+    local requests = {}
+    with_client(function(opts)
+      requests[#requests + 1] = vim.deepcopy(opts)
+      if opts.method == "GET" and opts.path:match("/_api/collection/source$") then
+        return json_response({ name = "source", type = 2 })
+      end
+      if opts.path:match("/_api/collection/source/properties$") then
+        return json_response({ waitForSync = true, schema = { rule = { type = "object" }, level = "moderate" } })
+      end
+      if opts.method == "GET" and opts.path:match("/_api/index%?collection=source$") then
+        return json_response({
+          indexes = {
+            { id = "source/0", type = "primary", fields = { "_key" } },
+            { id = "source/1", type = "persistent", fields = { "email" }, unique = true, name = "by_email" },
+          },
+        })
+      end
+      if opts.method == "POST" and opts.path:match("/_api/collection$") then
+        return json_response({ name = "target", type = 2 })
+      end
+      if opts.method == "POST" and opts.path:match("/_api/index%?collection=target$") then
+        return json_response({ id = "target/1", type = "persistent" })
+      end
+      if opts.path:match("/_api/cursor$") then
+        return json_response({ result = {}, hasMore = false })
+      end
+      if opts.path:match("/_api/collection/target/count$") then
+        return json_response({ count = 3 })
+      end
+      error("unexpected request: " .. opts.method .. " " .. opts.path)
+    end, function(client)
+      local result = client.duplicate_collection(config, "source", "target")
+      h.eq(3, result.copied_count)
+      h.eq(1, result.copied_indexes)
+    end)
+
+    local collection_payload
+    local index_payload
+    for _, request in ipairs(requests) do
+      if request.method == "POST" and request.path:match("/_api/collection$") then
+        collection_payload = vim.json.decode(request.body)
+      elseif request.method == "POST" and request.path:match("/_api/index%?collection=target$") then
+        index_payload = vim.json.decode(request.body)
+      end
+    end
+    h.eq(true, collection_payload.waitForSync)
+    h.eq("moderate", collection_payload.schema.level)
+    h.eq("persistent", index_payload.type)
+    h.eq(true, index_payload.unique)
+    h.eq(nil, index_payload.id)
+  end),
+
+  h.test("collection metadata and index mutations use asynchronous endpoints", function()
+    local requests = {}
+    with_client(function(opts)
+      requests[#requests + 1] = vim.deepcopy(opts)
+      if opts.method == "GET" and opts.path:match("/_api/index%?collection=items$") then
+        return json_response({ indexes = { { id = "items/0", type = "primary" } } })
+      end
+      if opts.method == "PUT" and opts.path:match("/_api/collection/items/properties$") then
+        return json_response(vim.json.decode(opts.body))
+      end
+      if opts.method == "POST" and opts.path:match("/_api/index%?collection=items$") then
+        return json_response(vim.tbl_extend("force", { id = "items/1" }, vim.json.decode(opts.body)))
+      end
+      if opts.method == "DELETE" and opts.path:match("/_api/index/items/1$") then
+        return json_response({ id = "items/1" })
+      end
+      error("unexpected request: " .. opts.method .. " " .. opts.path)
+    end, function(client)
+      local pending = 4
+      local values = {}
+      local function done(name)
+        return function(err, value)
+          assert(not err, tostring(err))
+          values[name] = value
+          pending = pending - 1
+        end
+      end
+      client.list_indexes_async(config, "items", done("indexes"))
+      client.update_collection_properties_async(config, "items", { schema = { level = "strict" } }, done("properties"))
+      client.create_index_async(
+        config,
+        "items",
+        { type = "persistent", fields = { "email" }, id = "ignored" },
+        done("created")
+      )
+      client.delete_index_async(config, "items/1", done("deleted"))
+      assert(vim.wait(1000, function()
+        return pending == 0
+      end))
+      h.eq("primary", values.indexes[1].type)
+      h.eq("strict", values.properties.schema.level)
+      h.eq(nil, vim.json.decode(requests[3].body).id)
+      h.eq("items/1", values.deleted.id)
+    end)
+  end),
+
+  h.test("named graph discovery and bounded traversal use official APIs", function()
+    local cursor_payload
+    with_client(function(opts)
+      if opts.path:match("/_api/gharial$") then
+        return json_response({ graphs = { { name = "social", edgeDefinitions = {} } } })
+      end
+      if opts.path:match("/_api/cursor$") then
+        cursor_payload = vim.json.decode(opts.body)
+        return json_response({ result = { { vertex = { _id = "users/alice" }, depth = 0 } }, hasMore = false })
+      end
+      error("unexpected request: " .. opts.method .. " " .. opts.path)
+    end, function(client)
+      local graphs
+      client.list_graphs_async(config, function(err, value)
+        assert(not err, tostring(err))
+        graphs = value
+      end)
+      assert(vim.wait(1000, function()
+        return graphs ~= nil
+      end))
+      h.eq("social", graphs[1].name)
+
+      local result
+      client.traverse_graph_async(config, "social", "users/alice", {
+        direction = "OUTBOUND",
+        depth = 3,
+        limit = 25,
+      }, function(err, value)
+        assert(not err, tostring(err))
+        result = value
+      end)
+      assert(vim.wait(1000, function()
+        return result ~= nil
+      end))
+      h.matches('0%.%.3 OUTBOUND @start GRAPH "social"', cursor_payload.query)
+      h.eq("users/alice", cursor_payload.bindVars.start)
+      h.eq(25, cursor_payload.bindVars.limit)
+      h.eq(25, cursor_payload.batchSize)
+    end)
+  end),
 }

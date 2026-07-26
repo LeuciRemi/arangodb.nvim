@@ -180,6 +180,71 @@ function M.parse_connection(url)
   }
 end
 
+local function command_password(command, timeout)
+  local argv = command
+  if type(command) == "string" then
+    argv = { vim.o.shell, vim.o.shellcmdflag, command }
+  end
+  if type(argv) ~= "table" or not utils.is_list(argv) or #argv == 0 then
+    error("ArangoDB password_command must be a non-empty command list or string", 0)
+  end
+  for _, value in ipairs(argv) do
+    if type(value) ~= "string" then
+      error("ArangoDB password_command arguments must be strings", 0)
+    end
+  end
+  local result = vim.system(argv, { text = true }):wait(timeout or 10000)
+  if result.code == 124 then
+    error("ArangoDB password_command timed out", 0)
+  end
+  if result.code ~= 0 then
+    error("ArangoDB password_command failed with exit code " .. tostring(result.code), 0)
+  end
+  local password = vim.trim(result.stdout or "")
+  if password == "" then
+    error("ArangoDB password_command returned an empty password", 0)
+  end
+  return password
+end
+
+--- Resolve a connection profile, evaluating its password provider only on use.
+function M.resolve_connection(item)
+  local profile
+  if type(item) == "string" then
+    profile = { url = item }
+  elseif type(item) == "table" then
+    profile = item.profile or item
+  end
+  if type(profile) ~= "table" or type(profile.url) ~= "string" then
+    return nil
+  end
+  local connection = M.parse_connection(profile.url)
+  if not connection then
+    return nil
+  end
+  connection.user = profile.username or profile.user or connection.user
+  local provider = profile.password
+  if type(provider) == "function" then
+    provider = provider({
+      name = item.name or profile.name,
+      database = connection.database,
+      host = connection.host,
+      user = connection.user,
+    })
+  elseif provider == nil and type(profile.password_env) == "string" then
+    provider = vim.env[profile.password_env]
+  elseif provider == nil and profile.password_command ~= nil then
+    provider = command_password(profile.password_command, profile.password_command_timeout)
+  end
+  if provider ~= nil then
+    if type(provider) ~= "string" then
+      error("ArangoDB password provider must return a string", 0)
+    end
+    connection.password = provider
+  end
+  return connection
+end
+
 --- Display a normalized user-facing error message.
 function M.notify_error(err, title)
   if require("arangodb.errors").is(err) then
@@ -194,10 +259,12 @@ function M.notify_error(err, title)
   vim.notify(err, vim.log.levels.ERROR, title and { title = title } or nil)
 end
 
-local function add_connection(items, seen, name, url)
+local function add_connection(items, seen, name, source)
   if type(name) ~= "string" or name == "" then
     return
   end
+  local profile = type(source) == "table" and source or { url = source }
+  local url = profile.url
   if type(url) ~= "string" or url == "" or M.parse_connection(url) == nil then
     return
   end
@@ -209,6 +276,7 @@ local function add_connection(items, seen, name, url)
   items[#items + 1] = {
     name = name,
     url = url,
+    profile = type(source) == "table" and vim.deepcopy(source) or nil,
   }
 end
 
@@ -221,14 +289,14 @@ local function collect_connections(source, items, seen)
   if utils.is_list(source) then
     for _, entry in ipairs(source) do
       if type(entry) == "table" then
-        add_connection(items, seen, entry.name, entry.url)
+        add_connection(items, seen, entry.name, entry)
       end
     end
     return
   end
 
-  for name, url in pairs(source) do
-    add_connection(items, seen, name, url)
+  for name, profile in pairs(source) do
+    add_connection(items, seen, name, profile)
   end
 end
 
@@ -309,7 +377,11 @@ end
 function M.default_database()
   local preferred = plugin_config().default_database
   if type(preferred) == "table" and preferred.name and preferred.url then
-    return preferred
+    return {
+      name = preferred.name,
+      url = preferred.url,
+      profile = vim.deepcopy(preferred),
+    }
   end
 
   if type(preferred) == "string" and preferred ~= "" then

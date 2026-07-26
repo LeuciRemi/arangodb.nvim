@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
 
 permissions:
@@ -36,16 +36,49 @@ jobs:
       - run: make test
 
   dependency-smoke-test:
-    name: Snacks v2.31.0
+    name: Snacks ${{ matrix.snacks }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        snacks: [v2.31.0, main]
     steps:
       - uses: actions/checkout@v7
       - uses: rhysd/action-setup-vim@v1
         with:
           version: stable
           neovim: true
-      - run: git clone --depth 1 --branch v2.31.0 https://github.com/folke/snacks.nvim.git /tmp/snacks.nvim
+      - run: git clone --depth 1 --branch ${{ matrix.snacks }} https://github.com/folke/snacks.nvim.git /tmp/snacks.nvim
       - run: >-
           nvim --clean --headless -u tests/minimal_init.lua
           "+set runtimepath+=/tmp/snacks.nvim"
           -l tests/snacks_smoke.lua
+
+  integration:
+    name: ArangoDB 3.12 integration
+    runs-on: ubuntu-latest
+    services:
+      arangodb:
+        image: arangodb:3.12
+        env:
+          ARANGO_ROOT_PASSWORD: integration-password
+        ports:
+          - 8529:8529
+    steps:
+      - uses: actions/checkout@v7
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          version: stable
+          neovim: true
+      - name: Wait for ArangoDB
+        run: |
+          for attempt in {1..30}; do
+            if curl --fail --silent --user root:integration-password http://127.0.0.1:8529/_api/version >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          exit 1
+      - run: make integration
+        env:
+          ARANGODB_TEST_URL: http://root:integration-password@127.0.0.1:8529/_system

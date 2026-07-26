@@ -55,10 +55,15 @@ function M.check()
   info("AQL batch size: `" .. tostring(aql.batch_size or 100) .. "`")
   info("AQL cursor ttl: `" .. tostring(aql.cursor_ttl or 300) .. "s`")
   info("AQL max runtime: `" .. tostring(aql.max_runtime or "server default") .. "`")
+  info("AQL result format: `" .. tostring(aql.result_format or "json") .. "`")
   info("AQL history: `" .. tostring(aql_history.enabled ~= false) .. "`")
   if aql_history.enabled ~= false then
     info("AQL history path: `" .. require("arangodb.aql_history").path() .. "`")
   end
+  info("AQL library path: `" .. require("arangodb.aql_library").path() .. "`")
+  local graph = config.graph or {}
+  info("graph traversal depth: `" .. tostring(graph.depth or 2) .. "`")
+  info("graph result limit: `" .. tostring(graph.max_nodes or 100) .. "`")
   if type(config.tls_ca_file) == "string" and config.tls_ca_file ~= "" then
     info("tls ca file: `" .. config.tls_ca_file .. "`")
     if vim.fn.filereadable(config.tls_ca_file) ~= 1 then

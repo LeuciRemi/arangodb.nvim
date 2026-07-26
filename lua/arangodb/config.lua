@@ -32,6 +32,14 @@ M.defaults = {
     delete = nil,
     duplicate = nil,
     related = nil,
+    graph = nil,
+  },
+  graph_keymaps = {
+    open = "<CR>",
+    start = "s",
+    refresh = "r",
+    depth = "d",
+    direction = "t",
   },
   aql_keymaps = {
     execute = "<leader>ar",
@@ -40,7 +48,11 @@ M.defaults = {
     profile = "<leader>ap",
     bind_vars = "<leader>ab",
     history = "<leader>ah",
+    library = "<leader>al",
+    save = "<leader>as",
     cancel = "<leader>ac",
+    result_format = nil,
+    export = nil,
     next_page = "<C-n>",
     prev_page = "<C-p>",
   },
@@ -49,12 +61,21 @@ M.defaults = {
     cursor_ttl = 300,
     max_runtime = nil,
     result_split = "auto",
+    result_format = "json",
     history = {
       enabled = true,
       max_entries = 100,
       path = nil,
       store_bind_vars = true,
     },
+    library = {
+      path = nil,
+    },
+  },
+  graph = {
+    depth = 2,
+    max_nodes = 100,
+    direction = "ANY",
   },
   layout = {
     preset = "auto",
@@ -131,13 +152,56 @@ local function validate_connections(connections)
       if type(entry) ~= "table" or type(entry.name) ~= "string" or type(entry.url) ~= "string" then
         error(string.format("arangodb.nvim: `connections[%d]` must contain string `name` and `url` fields", index), 3)
       end
+      if entry.user ~= nil and type(entry.user) ~= "string" then
+        error(string.format("arangodb.nvim: `connections[%d].user` must be a string", index), 3)
+      end
+      if entry.username ~= nil and type(entry.username) ~= "string" then
+        error(string.format("arangodb.nvim: `connections[%d].username` must be a string", index), 3)
+      end
+      if entry.password ~= nil and type(entry.password) ~= "string" and type(entry.password) ~= "function" then
+        error(string.format("arangodb.nvim: `connections[%d].password` must be a string or function", index), 3)
+      end
+      if entry.password_env ~= nil and type(entry.password_env) ~= "string" then
+        error(string.format("arangodb.nvim: `connections[%d].password_env` must be a string", index), 3)
+      end
+      if entry.password_command_timeout ~= nil then
+        assert_positive_integer(
+          string.format("connections[%d].password_command_timeout", index),
+          entry.password_command_timeout
+        )
+      end
+      if
+        entry.password_command ~= nil
+        and type(entry.password_command) ~= "string"
+        and type(entry.password_command) ~= "table"
+      then
+        error(string.format("arangodb.nvim: `connections[%d].password_command` must be a string or list", index), 3)
+      end
+      if type(entry.password_command) == "table" then
+        if not vim.islist(entry.password_command) or #entry.password_command == 0 then
+          error(string.format("arangodb.nvim: `connections[%d].password_command` must be a non-empty list", index), 3)
+        end
+        for argument, value in ipairs(entry.password_command) do
+          if type(value) ~= "string" then
+            error(
+              string.format("arangodb.nvim: `connections[%d].password_command[%d]` must be a string", index, argument),
+              3
+            )
+          end
+        end
+      end
     end
     return
   end
 
-  for name, url in pairs(connections) do
-    if type(name) ~= "string" or type(url) ~= "string" then
-      error("arangodb.nvim: `connections` keys and values must be strings", 3)
+  for name, profile in pairs(connections) do
+    if type(name) ~= "string" or (type(profile) ~= "string" and type(profile) ~= "table") then
+      error("arangodb.nvim: `connections` keys must be strings and values must be strings or tables", 3)
+    end
+    if type(profile) == "table" then
+      local copy = vim.deepcopy(profile)
+      copy.name = name
+      validate_connections({ copy })
     end
   end
 end
@@ -158,13 +222,18 @@ local function validate(opts)
   then
     error("arangodb.nvim: table `default_database` must contain string `name` and `url` fields", 3)
   end
+  if type(opts.default_database) == "table" then
+    validate_connections({ opts.default_database })
+  end
 
   validate_keymaps("keymaps", opts.keymaps)
   validate_keymaps("picker_keymaps", opts.picker_keymaps)
   validate_keymaps("document_keymaps", opts.document_keymaps)
+  validate_keymaps("graph_keymaps", opts.graph_keymaps)
   validate_keymaps("aql_keymaps", opts.aql_keymaps)
   assert_type("layout", opts.layout, "table", true)
   assert_type("aql", opts.aql, "table", true)
+  assert_type("graph", opts.graph, "table", true)
 
   for _, name in ipairs({
     "field_sample_size",
@@ -220,6 +289,9 @@ local function validate(opts)
     then
       error("arangodb.nvim: `aql.result_split` must be `auto`, `right`, or `bottom`", 3)
     end
+    if opts.aql.result_format ~= nil and opts.aql.result_format ~= "json" and opts.aql.result_format ~= "table" then
+      error("arangodb.nvim: `aql.result_format` must be `json` or `table`", 3)
+    end
     assert_type("aql.history", opts.aql.history, "table", true)
     if opts.aql.history then
       assert_type("aql.history.enabled", opts.aql.history.enabled, "boolean", true)
@@ -228,6 +300,26 @@ local function validate(opts)
       if opts.aql.history.max_entries ~= nil then
         assert_positive_integer("aql.history.max_entries", opts.aql.history.max_entries)
       end
+    end
+    assert_type("aql.library", opts.aql.library, "table", true)
+    if opts.aql.library then
+      assert_type("aql.library.path", opts.aql.library.path, "string", true)
+    end
+  end
+  if opts.graph then
+    if opts.graph.depth ~= nil then
+      assert_positive_integer("graph.depth", opts.graph.depth)
+    end
+    if opts.graph.max_nodes ~= nil then
+      assert_positive_integer("graph.max_nodes", opts.graph.max_nodes)
+    end
+    if
+      opts.graph.direction ~= nil
+      and opts.graph.direction ~= "ANY"
+      and opts.graph.direction ~= "OUTBOUND"
+      and opts.graph.direction ~= "INBOUND"
+    then
+      error("arangodb.nvim: `graph.direction` must be `ANY`, `OUTBOUND`, or `INBOUND`", 3)
     end
   end
 end
