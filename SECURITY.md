@@ -8,6 +8,6 @@ Include the affected version, impact, minimal reproduction, and any suggested mi
 
 ## Credential safety
 
-arangodb.nvim accepts credentials in connection URLs. Prefer environment variables or another secret-management mechanism instead of committing credentials to a Neovim configuration repository. The health check does not print passwords, but users should still review logs and reproductions before sharing them.
+arangodb.nvim accepts credentials in connection URLs, but structured connection profiles can resolve passwords lazily through a callback, `password_env`, or `password_command`. Prefer these providers instead of committing credentials to a Neovim configuration repository. The health check and command completion do not resolve or print provider output, but users should still review logs and reproductions before sharing them.
 
 Keep `tls_verify = true` unless you fully control the network and understand the risk. Use `tls_ca_file` for a private certificate authority.

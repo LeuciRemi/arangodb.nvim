@@ -52,7 +52,7 @@ return {
     h.fails("string or false", function()
       config.setup({ keymaps = { browse = 42 } })
     end)
-    h.fails("keys and values must be strings", function()
+    h.fails("keys must be strings and values must be strings or tables", function()
       config.setup({ connections = { example = 42 } })
     end)
     h.fails("must contain string `name` and `url`", function()
@@ -76,6 +76,62 @@ return {
     h.fails("aql.history.max_entries", function()
       config.setup({ aql = { history = { max_entries = 0 } } })
     end)
+    h.fails("password_command.*non%-empty list", function()
+      config.setup({ connections = { example = { url = "http://localhost/example", password_command = {} } } })
+    end)
+    h.fails("password_command%[2%].*string", function()
+      config.setup({
+        connections = { example = { url = "http://localhost/example", password_command = { "secret", 42 } } },
+      })
+    end)
+    h.fails("password_command_timeout.*positive integer", function()
+      config.setup({
+        connections = { example = { url = "http://localhost/example", password_command_timeout = 0 } },
+      })
+    end)
+    config.setup()
+  end),
+
+  h.test("structured connections resolve password providers only when used", function()
+    local config = require("arangodb.config")
+    local core = require("arangodb.core")
+    local calls = 0
+    config.setup({
+      connections = {
+        reporting = {
+          url = "https://db.example.com:8530/reporting",
+          username = "reader",
+          password = function(context)
+            calls = calls + 1
+            h.eq("reporting", context.name)
+            return "provider-secret"
+          end,
+        },
+      },
+    })
+
+    local items = core.available_databases()
+    h.eq(0, calls)
+    h.eq("https://db.example.com:8530/reporting", items[1].url)
+    local connection = core.resolve_connection(items[1])
+    h.eq(1, calls)
+    h.eq("reader", connection.user)
+    h.eq("provider-secret", connection.password)
+
+    vim.env.ARANGODB_TEST_PASSWORD = "environment-secret"
+    local from_env = core.resolve_connection({
+      url = "http://localhost:8529/example",
+      user = "root",
+      password_env = "ARANGODB_TEST_PASSWORD",
+    })
+    h.eq("environment-secret", from_env.password)
+    vim.env.ARANGODB_TEST_PASSWORD = nil
+
+    local from_command = core.resolve_connection({
+      url = "http://localhost:8529/example",
+      password_command = { "sh", "-c", "printf command-secret" },
+    })
+    h.eq("command-secret", from_command.password)
     config.setup()
   end),
 
@@ -127,6 +183,9 @@ return {
   h.test("commands expose the AQL editor entry point", function()
     require("arangodb.commands").setup()
     h.eq(2, vim.fn.exists(":ArangoAql"))
+    h.eq(2, vim.fn.exists(":ArangoAqlAttach"))
+    h.eq(2, vim.fn.exists(":ArangoAqlLibrary"))
+    h.eq(2, vim.fn.exists(":ArangoGraph"))
   end),
 
   h.test("JSON formatting is deterministic", function()

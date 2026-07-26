@@ -380,4 +380,69 @@ return {
       end
     )
   end),
+
+  h.test("AQL result buffers toggle table format and export the current page", function()
+    with_aql(
+      base_client({
+        execute_aql_async = function(_, _, _, _, done)
+          return async({ result = { { name = "Alice", score = 10 } }, count = 1, hasMore = false }, done)
+        end,
+      }),
+      function(aql)
+        local session = aql.open({ config = config, query = "FOR user IN users RETURN user" })
+        vim.api.nvim_buf_call(session.query_buf, function()
+          vim.cmd("ArangoAqlExecute")
+        end)
+        assert(vim.wait(1000, function()
+          return session.result_buf ~= nil
+        end))
+        local path = vim.fn.tempname() .. ".csv"
+        vim.api.nvim_buf_call(session.result_buf, function()
+          vim.cmd("ArangoAqlResultFormat table")
+          vim.cmd("ArangoAqlExport " .. vim.fn.fnameescape(path))
+        end)
+        h.eq("markdown", vim.bo[session.result_buf].filetype)
+        h.matches("| name | score |", table.concat(vim.api.nvim_buf_get_lines(session.result_buf, 0, -1, false), "\n"))
+        h.eq(1, vim.fn.filereadable(path))
+        h.matches("Alice,10", table.concat(vim.fn.readfile(path, "b"), "\n"))
+
+        local original_confirm = vim.fn.confirm
+        local answer = 2
+        vim.fn.writefile({ "keep me" }, path)
+        vim.fn.confirm = function(message)
+          h.matches("Overwrite existing AQL export", message)
+          h.matches(vim.pesc(path), message)
+          return answer
+        end
+        vim.api.nvim_buf_call(session.result_buf, function()
+          vim.cmd("ArangoAqlExport " .. vim.fn.fnameescape(path))
+        end)
+        h.eq("keep me", vim.fn.readfile(path)[1])
+        answer = 1
+        vim.api.nvim_buf_call(session.result_buf, function()
+          vim.cmd("ArangoAqlExport " .. vim.fn.fnameescape(path))
+        end)
+        vim.fn.confirm = original_confirm
+        h.matches("Alice,10", table.concat(vim.fn.readfile(path, "b"), "\n"))
+        vim.fn.delete(path)
+      end
+    )
+  end),
+
+  h.test("real .aql buffers can be attached without becoming scratch buffers", function()
+    with_aql(base_client(), function(aql)
+      local buf = vim.api.nvim_create_buf(true, false)
+      vim.api.nvim_buf_set_name(buf, vim.fn.tempname() .. ".aql")
+      vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "RETURN 42" })
+      vim.bo[buf].filetype = "aql"
+      vim.api.nvim_set_current_buf(buf)
+
+      local session = aql.attach({ config = config, buf = buf })
+      h.eq(buf, session.query_buf)
+      h.eq(true, session.attached)
+      h.eq("", vim.bo[buf].buftype)
+      h.eq("RETURN 42", table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
+      h.eq(2, vim.fn.exists(":ArangoAqlExecute"))
+    end)
+  end),
 }

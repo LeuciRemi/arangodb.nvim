@@ -72,4 +72,19 @@ function M.aql(opts)
   return require("arangodb.aql").open(opts)
 end
 
+--- Attach AQL tooling to the current .aql file buffer.
+function M.aql_attach(opts)
+  return require("arangodb.aql").attach(opts)
+end
+
+--- Open an AQL editor and browse named queries for its database.
+function M.aql_library(opts)
+  return require("arangodb.aql").open_library(opts)
+end
+
+--- Open the bounded named-graph explorer.
+function M.graph(opts)
+  return require("arangodb.graph").open(opts)
+end
+
 return M

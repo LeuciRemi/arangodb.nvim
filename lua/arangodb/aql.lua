@@ -1,14 +1,19 @@
 --- Interactive AQL editor, result buffers, pagination, and history UI.
 local M = {}
 
+local browser_ui = require("arangodb.browser.ui")
 local client = require("arangodb.client")
 local core = require("arangodb.core")
 local history = require("arangodb.aql_history")
+local library = require("arangodb.aql_library")
+local result_view = require("arangodb.aql_result")
 local utils = require("arangodb.utils")
 
 local session_sequence = 0
 local sessions = {}
 local setup_bind_actions
+local open_library
+local save_named
 
 local function options()
   return require("arangodb.config").get().aql or {}
@@ -283,6 +288,54 @@ local function setup_result_actions(session, buf)
   vim.api.nvim_buf_create_user_command(buf, "ArangoAqlPrevPage", function()
     prev_page(session)
   end, { desc = "Show the previous AQL result page" })
+  vim.api.nvim_buf_create_user_command(buf, "ArangoAqlResultFormat", function(command_opts)
+    local format = command_opts.args ~= "" and command_opts.args
+      or (session.result_format == "table" and "json" or "table")
+    if format ~= "json" and format ~= "table" then
+      notify_error("AQL result format must be `json` or `table`")
+      return
+    end
+    session.result_format = format
+    if session.current_result then
+      M.render_result(session, session.current_result)
+    end
+  end, {
+    nargs = "?",
+    complete = function()
+      return { "json", "table" }
+    end,
+    desc = "Switch the AQL result between JSON and table formats",
+  })
+  vim.api.nvim_buf_create_user_command(buf, "ArangoAqlExport", function(command_opts)
+    local function export(path)
+      if not path or vim.trim(path) == "" then
+        return
+      end
+      path = vim.trim(path)
+      local overwrite = false
+      if result_view.path_exists(path) then
+        overwrite = vim.fn.confirm(
+          string.format("Overwrite existing AQL export?\n%s", vim.fn.fnamemodify(vim.fn.expand(path), ":p")),
+          "&Overwrite\n&Cancel",
+          2
+        ) == 1
+        if not overwrite then
+          return
+        end
+      end
+      local ok, exported = pcall(result_view.export, session.current_result or {}, path, { overwrite = overwrite })
+      if not ok then
+        notify_error(exported, "ArangoDB AQL Export")
+        return
+      end
+      vim.notify("AQL result exported to " .. exported, vim.log.levels.INFO)
+    end
+    if command_opts.args ~= "" then
+      export(command_opts.args)
+    else
+      vim.ui.input({ prompt = "Export result (.json, .csv, .md): " }, export)
+    end
+  end, { nargs = "?", complete = "file", desc = "Export the current AQL result page" })
   local maps = keymaps()
   set_local_keymap(buf, "n", maps.next_page, function()
     next_page(session)
@@ -290,6 +343,15 @@ local function setup_result_actions(session, buf)
   set_local_keymap(buf, "n", maps.prev_page, function()
     prev_page(session)
   end, "Previous AQL Result Page")
+  set_local_keymap(buf, "n", maps.result_format, function()
+    session.result_format = session.result_format == "table" and "json" or "table"
+    if session.current_result then
+      M.render_result(session, session.current_result)
+    end
+  end, "Toggle AQL Result Format")
+  set_local_keymap(buf, "n", maps.export, function()
+    vim.cmd("ArangoAqlExport")
+  end, "Export AQL Result")
 end
 
 local function ensure_result_buffer(session)
@@ -328,7 +390,10 @@ end
 --- Render a JSON value in the adaptive, read-only result split.
 function M.render_result(session, value)
   local buf = ensure_result_buffer(session)
-  set_buffer_text(buf, utils.json_pretty(value))
+  session.current_result = value
+  local text, filetype = result_view.render(value, session.result_format or options().result_format or "json")
+  set_buffer_text(buf, text)
+  vim.bo[buf].filetype = filetype
   local result_win = find_window(buf)
   if not result_win then
     local query_win = find_window(session.query_buf) or vim.api.nvim_get_current_win()
@@ -637,6 +702,83 @@ local function open_history(session)
   })
 end
 
+save_named = function(session)
+  local query_ok, query = pcall(require_query, full_query(session))
+  if not query_ok then
+    notify_error(query, "ArangoDB AQL Library")
+    return
+  end
+  local bind_ok, bind_vars = pcall(parse_bind_vars, session)
+  if not bind_ok then
+    notify_error(bind_vars, "ArangoDB AQL Library")
+    return
+  end
+  vim.ui.input({ prompt = "Named AQL query: ", default = session.library_name }, function(name)
+    name = type(name) == "string" and vim.trim(name) or ""
+    if name == "" then
+      return
+    end
+    local ok, saved = pcall(library.put, {
+      name = name,
+      connection = session.connection,
+      database = session.config.database,
+      query = query,
+      bind_vars = bind_vars,
+    })
+    if not ok then
+      notify_error(saved, "ArangoDB AQL Library")
+      return
+    end
+    session.library_name = saved.name
+    vim.notify("Saved named AQL query: " .. saved.name, vim.log.levels.INFO)
+  end)
+end
+
+open_library = function(session)
+  local entries, warning = library.load()
+  if warning then
+    vim.notify(warning, vim.log.levels.WARN, { title = "ArangoDB AQL Library" })
+  end
+  entries = vim.tbl_filter(function(entry)
+    return entry.database == session.config.database
+      and (entry.connection == nil or entry.connection == session.connection)
+  end, entries)
+  if #entries == 0 then
+    vim.notify("No named AQL queries for " .. session.config.database, vim.log.levels.INFO)
+    return
+  end
+  vim.ui.select(
+    entries,
+    browser_ui.select_options({
+      prompt = "Named AQL queries (" .. session.config.database .. ")",
+      format_item = function(entry)
+        local first = vim.split(entry.query, "\n", { plain = true })[1] or ""
+        return string.format("%s  %s", entry.name, first)
+      end,
+    }),
+    function(entry)
+      if not entry then
+        return
+      end
+      vim.ui.select({ "Load", "Delete" }, browser_ui.select_options({ prompt = entry.name }), function(action)
+        if action == "Load" then
+          restore_history(session, entry)
+          session.library_name = entry.name
+        elseif
+          action == "Delete" and vim.fn.confirm("Delete named query " .. entry.name .. "?", "&No\n&Yes", 1) == 2
+        then
+          local ok, removed = pcall(library.remove, entry)
+          if not ok then
+            notify_error(removed, "ArangoDB AQL Library")
+          elseif removed then
+            vim.notify("Deleted named AQL query: " .. entry.name, vim.log.levels.INFO)
+          end
+        end
+      end)
+    end
+  )
+end
+
 local function command_query(session, command_opts)
   return query_lines(session.query_buf, command_opts.line1, command_opts.line2)
 end
@@ -663,6 +805,12 @@ setup_bind_actions = function(session, buf)
   add_command("ArangoAqlHistory", function()
     open_history(session)
   end, "Browse AQL history")
+  add_command("ArangoAqlLibrary", function()
+    open_library(session)
+  end, "Browse named AQL queries")
+  add_command("ArangoAqlSave", function()
+    save_named(session)
+  end, "Save the associated AQL query by name")
   add_command("ArangoAqlCancel", function()
     cancel_request(session, session.request ~= nil)
     close_cursor(session)
@@ -687,6 +835,12 @@ setup_bind_actions = function(session, buf)
   set_local_keymap(buf, "n", maps.history, function()
     open_history(session)
   end, "Browse AQL History")
+  set_local_keymap(buf, "n", maps.library, function()
+    open_library(session)
+  end, "Browse Named AQL Queries")
+  set_local_keymap(buf, "n", maps.save, function()
+    save_named(session)
+  end, "Save Named AQL Query")
   set_local_keymap(buf, "n", maps.cancel, function()
     cancel_request(session, session.request ~= nil)
     close_cursor(session)
@@ -718,6 +872,12 @@ local function setup_query_actions(session)
   vim.api.nvim_buf_create_user_command(buf, "ArangoAqlHistory", function()
     open_history(session)
   end, { desc = "Browse AQL history" })
+  vim.api.nvim_buf_create_user_command(buf, "ArangoAqlLibrary", function()
+    open_library(session)
+  end, { desc = "Browse named AQL queries" })
+  vim.api.nvim_buf_create_user_command(buf, "ArangoAqlSave", function()
+    save_named(session)
+  end, { desc = "Save the current AQL query by name" })
   vim.api.nvim_buf_create_user_command(buf, "ArangoAqlCancel", function()
     cancel_request(session, session.request ~= nil)
     close_cursor(session)
@@ -745,6 +905,12 @@ local function setup_query_actions(session)
   set_local_keymap(buf, "n", maps.history, function()
     open_history(session)
   end, "Browse AQL History")
+  set_local_keymap(buf, "n", maps.library, function()
+    open_library(session)
+  end, "Browse Named AQL Queries")
+  set_local_keymap(buf, "n", maps.save, function()
+    save_named(session)
+  end, "Save Named AQL Query")
   set_local_keymap(buf, "n", maps.cancel, function()
     cancel_request(session, session.request ~= nil)
     close_cursor(session)
@@ -773,9 +939,14 @@ local function current_tab_has_aql_session()
 end
 
 local function create_session(config, connection, opts)
-  local open_in_new_tab = current_tab_has_aql_session()
+  opts = opts or {}
+  local attached = type(opts.buf) == "number" and vim.api.nvim_buf_is_valid(opts.buf)
+  local buf = attached and opts.buf or vim.api.nvim_create_buf(true, false)
+  if sessions[buf] then
+    return sessions[buf]
+  end
+  local open_in_new_tab = not attached and current_tab_has_aql_session()
   session_sequence = session_sequence + 1
-  local buf = vim.api.nvim_create_buf(true, false)
   local session = {
     id = session_sequence,
     config = vim.deepcopy(config),
@@ -785,19 +956,27 @@ local function create_session(config, connection, opts)
     pages = {},
     page_index = 0,
     request_generation = 0,
+    result_format = options().result_format or "json",
+    attached = attached,
   }
   sessions[buf] = session
-  pcall(vim.api.nvim_buf_set_name, buf, string.format("arangodb-aql://%s/%d.aql", config.database, session.id))
-  vim.bo[buf].buftype = "nofile"
-  vim.bo[buf].bufhidden = "hide"
-  vim.bo[buf].swapfile = false
+  if not attached then
+    pcall(vim.api.nvim_buf_set_name, buf, string.format("arangodb-aql://%s/%d.aql", config.database, session.id))
+    vim.bo[buf].buftype = "nofile"
+    vim.bo[buf].bufhidden = "hide"
+    vim.bo[buf].swapfile = false
+  end
   vim.bo[buf].buflisted = true
   vim.bo[buf].filetype = "aql"
   vim.bo[buf].modifiable = true
   vim.b[buf].arangodb_aql = true
   vim.b[buf].arangodb_aql_database = config.database
   vim.b[buf].arangodb_aql_connection = session.connection
-  set_buffer_text(buf, opts.query or "")
+  if opts.query ~= nil then
+    set_buffer_text(buf, opts.query)
+  elseif not attached then
+    set_buffer_text(buf, "")
+  end
   setup_query_actions(session)
   vim.api.nvim_create_autocmd("BufWipeout", {
     buffer = buf,
@@ -818,6 +997,13 @@ local function create_session(config, connection, opts)
   if query_win then
     vim.api.nvim_set_current_win(query_win)
   end
+  if opts.open_library then
+    vim.schedule(function()
+      if valid_buffer(session.query_buf) then
+        open_library(session)
+      end
+    end)
+  end
   vim.api.nvim_create_autocmd("BufEnter", {
     buffer = buf,
     callback = function()
@@ -828,9 +1014,13 @@ local function create_session(config, connection, opts)
 end
 
 local function open_item(item, opts)
-  local config = core.parse_connection(item.url)
+  local ok, config = pcall(core.resolve_connection, item)
+  if not ok then
+    notify_error(config)
+    return
+  end
   if not config then
-    notify_error("Invalid ArangoDB connection URL: " .. tostring(item.url))
+    notify_error("Invalid ArangoDB connection URL for " .. tostring(item.name or "selected connection"))
     return
   end
   return create_session(config, item.name, opts)
@@ -855,16 +1045,68 @@ function M.open(opts)
     notify_error("No ArangoDB database configured")
     return
   end
-  vim.ui.select(items, {
-    prompt = "Arango database for AQL",
-    format_item = function(item)
-      return item.name
-    end,
-  }, function(item)
-    if item then
-      open_item(item, opts)
+  vim.ui.select(
+    items,
+    browser_ui.select_options({
+      prompt = "Arango database for AQL",
+      format_item = function(item)
+        return item.name
+      end,
+    }),
+    function(item)
+      if item then
+        open_item(item, opts)
+      end
     end
-  end)
+  )
+end
+
+--- Attach AQL commands and bind variables to the current real .aql buffer.
+function M.attach(opts)
+  opts = vim.tbl_extend("force", opts or {}, { buf = (opts and opts.buf) or vim.api.nvim_get_current_buf() })
+  if vim.bo[opts.buf].filetype ~= "aql" and vim.fn.fnamemodify(vim.api.nvim_buf_get_name(opts.buf), ":e") ~= "aql" then
+    notify_error("ArangoAqlAttach must be run from an .aql buffer")
+    return
+  end
+  if sessions[opts.buf] then
+    return sessions[opts.buf]
+  end
+  if type(opts.config) == "table" then
+    return create_session(opts.config, opts.connection or opts.config.database, opts)
+  end
+  if type(opts.database) == "string" and opts.database ~= "" then
+    local item = core.find_database(opts.database)
+      or {
+        name = opts.database,
+        url = core.arango_url(opts.database),
+      }
+    return open_item(item, opts)
+  end
+  local items = core.available_databases()
+  if #items == 0 then
+    notify_error("No ArangoDB database configured")
+    return
+  end
+  vim.ui.select(
+    items,
+    browser_ui.select_options({
+      prompt = "Attach .aql file to database",
+      format_item = function(item)
+        return item.name
+      end,
+    }),
+    function(item)
+      if item then
+        open_item(item, opts)
+      end
+    end
+  )
+end
+
+--- Open an AQL editor and immediately browse the named-query library.
+function M.open_library(opts)
+  opts = vim.tbl_extend("force", opts or {}, { open_library = true })
+  return M.open(opts)
 end
 
 --- Return an editor session for tests and internal integrations.

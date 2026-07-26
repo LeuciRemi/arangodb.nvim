@@ -19,7 +19,7 @@ make lint
 make docs
 ```
 
-The unit suite runs on Neovim 0.10.4 and the current stable version in CI. Formatting uses StyLua 2.5.2. An optional real-server test is available for a disposable ArangoDB database:
+The unit suite runs on Neovim 0.10.4 and the current stable version in CI. Formatting uses StyLua 2.5.2. CI also runs the real-server suite against ArangoDB 3.12. You can run it locally against a disposable database:
 
 ```bash
 ARANGODB_TEST_URL=http://127.0.0.1:8529/_system make integration

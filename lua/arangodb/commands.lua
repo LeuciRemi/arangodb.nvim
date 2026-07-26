@@ -62,6 +62,30 @@ function M.setup()
     complete = complete_databases,
     desc = "Open a new ArangoDB AQL editor",
   })
+
+  vim.api.nvim_create_user_command("ArangoAqlAttach", function(opts)
+    require("arangodb").aql_attach({ database = opts.args ~= "" and opts.args or nil })
+  end, {
+    nargs = "?",
+    complete = complete_databases,
+    desc = "Attach ArangoDB AQL tools to the current .aql file",
+  })
+
+  vim.api.nvim_create_user_command("ArangoAqlLibrary", function(opts)
+    require("arangodb").aql_library({ database = opts.args ~= "" and opts.args or nil })
+  end, {
+    nargs = "?",
+    complete = complete_databases,
+    desc = "Open the named ArangoDB AQL query library",
+  })
+
+  vim.api.nvim_create_user_command("ArangoGraph", function(opts)
+    require("arangodb").graph({ database = opts.args ~= "" and opts.args or nil })
+  end, {
+    nargs = "?",
+    complete = complete_databases,
+    desc = "Explore an ArangoDB named graph",
+  })
 end
 
 return M
