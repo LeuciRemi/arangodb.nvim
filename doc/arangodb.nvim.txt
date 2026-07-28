@@ -84,19 +84,19 @@ Call setup() once after installing the plugin:
     },
     picker_keymaps = {
       execute = "<C-x>",
-      create = "<C-a>",
-      create_collection = "<C-n>",
-      duplicate_collection = "<C-d>",
+      create = false,
+      create_collection = false,
+      duplicate_collection = false,
       next_page = "<C-n>",
       prev_page = "<C-p>",
       back = "<C-b>",
       change_field = "<C-f>",
       reset = "<C-u>",
       related = "<C-o>",
-      delete = "<C-d>",
-      duplicate = "<C-y>",
-      truncate = "<C-t>",
-      rename = "<C-r>",
+      delete = false,
+      duplicate = false,
+      truncate = false,
+      rename = false,
     },
     document_keymaps = {
       save = nil,
@@ -191,7 +191,9 @@ keymaps ~
     unset by default.
 
 picker_keymaps ~
-    Picker-local mappings. Any value may be false to disable that mapping.
+    Picker-local mappings. Navigation and the actions menu work in normal and
+    insert mode. Write mappings are unset by default and, when configured, are
+    normal-mode-only. Any value may be false to disable that mapping.
 
 document_keymaps ~
     Buffer-local mappings for save, delete, duplicate, related, and graph. They
@@ -488,33 +490,26 @@ PICKER MAPPINGS                                      *arangodb.nvim-mappings*
 Collection picker defaults:
 
   <Enter>   open collection
-  <C-a>     create draft document
-  <C-n>     create collection
-  <C-d>     duplicate collection
-  <C-r>     rename collection
-  <C-t>     truncate collection
   <C-x>     actions menu
   <C-b>     database picker, when available
 
 Document picker defaults:
 
   <Enter>   open document
-  <C-a>     create draft document
-  <C-y>     duplicate document as a draft
-  <C-d>     delete document
   <C-o>     open related document
   <C-f>     change filter field
   <C-u>     reset search
   <C-p>     previous page
   <C-n>     next page
-  <C-t>     truncate collection
   <C-x>     actions menu
   <C-b>     go back
 
+Navigation and the actions menu work in normal and insert mode. Picker write
+mappings are unset by default; create, duplicate, rename, delete, and truncate
+remain available from <C-x>. Explicit write mappings are normal-mode-only.
 Destructive operations request confirmation with the target database and
 resource. Renaming, truncating, or deleting is refused while a matching
-ArangoDB buffer has unsaved changes. Picker actions are normal-mode-only and do
-not replace insertion-mode editing keys.
+ArangoDB buffer has unsaved changes.
 
 ===============================================================================
 LUA API                                                    *arangodb.nvim-api*

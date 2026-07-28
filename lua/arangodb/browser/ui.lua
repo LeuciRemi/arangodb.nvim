@@ -95,7 +95,8 @@ end
 
 function M.merge_keymaps(...)
   local merged = {}
-  for _, mappings in ipairs({ ... }) do
+  for index = 1, select("#", ...) do
+    local mappings = select(index, ...)
     if type(mappings) == "table" then
       merged = vim.tbl_extend("force", merged, mappings)
     end

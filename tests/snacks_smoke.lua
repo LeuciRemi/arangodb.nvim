@@ -5,6 +5,39 @@ local database = {
   database = "test",
 }
 
+local function picker_action(picker, action)
+  for _, mapping in pairs(picker.opts.win.input.keys or {}) do
+    if type(mapping) == "table" and mapping[1] == action then
+      return mapping
+    end
+  end
+end
+
+local function supports_mode(mapping, mode)
+  local modes = type(mapping.mode) == "table" and mapping.mode or { mapping.mode }
+  return vim.tbl_contains(modes, mode)
+end
+
+local function assert_navigation_modes(picker, actions)
+  for _, action in ipairs(actions) do
+    local mapping = assert(picker_action(picker, action), "Missing picker action " .. action)
+    assert(supports_mode(mapping, "n"), action .. " is not available in normal mode")
+    assert(supports_mode(mapping, "i"), action .. " is not available in insert mode")
+  end
+end
+
+local function assert_actions_unmapped(picker, actions)
+  for _, action in ipairs(actions) do
+    assert(picker_action(picker, action) == nil, action .. " should not have a default mapping")
+  end
+end
+
+local function assert_normal_only(picker, action)
+  local mapping = assert(picker_action(picker, action), "Missing configured picker action " .. action)
+  assert(supports_mode(mapping, "n"), action .. " is not available in normal mode")
+  assert(not supports_mode(mapping, "i"), action .. " should not be available in insert mode")
+end
+
 package.loaded["arangodb.client"] = {
   list_databases = function()
     return { "test" }
@@ -109,6 +142,15 @@ assert(
   end),
   "Snacks collection picker did not load asynchronously"
 )
+local collection_picker = require("snacks.picker.core.picker").get()[1]
+assert_navigation_modes(collection_picker, { "arango_action_menu" })
+assert_actions_unmapped(collection_picker, {
+  "arango_create_document",
+  "arango_create_collection",
+  "arango_duplicate_collection",
+  "arango_rename_collection",
+  "arango_truncate_collection",
+})
 assert(
   vim.wait(1000, function()
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
@@ -148,8 +190,50 @@ assert(
   end),
   "Snacks document picker did not load a cursor page asynchronously"
 )
+local document_picker = require("snacks.picker.core.picker").get()[1]
+assert_navigation_modes(document_picker, {
+  "arango_action_menu",
+  "arango_prev_page",
+  "arango_next_page",
+  "arango_change_field",
+  "arango_reset_search",
+  "arango_open_related",
+  "arango_go_back",
+})
+assert_actions_unmapped(document_picker, {
+  "arango_create_document",
+  "arango_duplicate_document",
+  "arango_delete_document",
+  "arango_truncate_collection",
+})
 
 require("snacks.picker.core.picker").get()[1]:close()
+require("arangodb").setup({
+  connections = { test = "http://localhost:8529/test" },
+  default_database = "test",
+  picker_keymaps = {
+    create = "<C-a>",
+    delete = "<C-d>",
+  },
+})
+require("arangodb.browser").open({
+  kind = "collection",
+  config = database,
+  collection = "items",
+  field = "_key",
+})
+assert(
+  vim.wait(1000, function()
+    local pickers = require("snacks.picker.core.picker").get()
+    return #pickers == 1 and pickers[1].finder:count() == 1
+  end),
+  "Snacks document picker with configured write mappings did not load"
+)
+local configured_picker = require("snacks.picker.core.picker").get()[1]
+assert_normal_only(configured_picker, "arango_create_document")
+assert_normal_only(configured_picker, "arango_delete_document")
+configured_picker:close()
+
 package.loaded["arangodb.aql_history"] = {
   load = function()
     return {

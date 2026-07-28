@@ -20,6 +20,6 @@ All notable changes to arangodb.nvim are documented here.
 - Collection and document actions no longer block Neovim while waiting for the server.
 - Collection duplication now rolls back the target if a property, index, or document-copy step fails or if the operation is cancelled after target creation.
 - AQL exports require confirmation before overwrite and use atomic file replacement.
-- Picker action mappings no longer override insertion-mode editing keys, and graph-buffer mappings are configurable.
+- Picker navigation and the actions menu work in normal and insert mode, while write mappings are unset by default and remain normal-mode-only when configured. Graph-buffer mappings are configurable.
 
 [0.6.0]: https://github.com/LeuciRemi/arangodb.nvim/compare/v0.5.2...v0.6.0

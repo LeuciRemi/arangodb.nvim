@@ -85,19 +85,19 @@ require("arangodb").setup({
   },
   picker_keymaps = {
     execute = "<C-x>",
-    create = "<C-a>",
-    create_collection = "<C-n>",
-    duplicate_collection = "<C-d>",
+    create = false,
+    create_collection = false,
+    duplicate_collection = false,
     next_page = "<C-n>",
     prev_page = "<C-p>",
     back = "<C-b>",
     change_field = "<C-f>",
     reset = "<C-u>",
     related = "<C-o>",
-    delete = "<C-d>",
-    duplicate = "<C-y>",
-    truncate = "<C-t>",
-    rename = "<C-r>",
+    delete = false,
+    duplicate = false,
+    truncate = false,
+    rename = false,
   },
   document_keymaps = {
     save = nil,
@@ -174,7 +174,7 @@ require("arangodb").setup({
 })
 ```
 
-Set any keymap to `false` to disable it. Global keymaps are unset by default so the plugin does not claim user mappings. `layout.preset = "auto"` selects a side-by-side view on wide screens and a stacked view on smaller screens.
+Set any keymap to `false` to disable it. Global keymaps and picker write mappings are unset by default so the plugin does not claim user mappings or bind database mutations to input-editing keys. `layout.preset = "auto"` selects a side-by-side view on wide screens and a stacked view on smaller screens.
 
 `auto_discover` is deliberately disabled by default. When enabled, the plugin queries `/_api/database/user` using the `NVIM_ARANGO_HOST`, port, scheme, and credential variables. This avoids unexpected network requests during command completion and health checks.
 
@@ -309,11 +309,6 @@ Default collection-picker actions:
 | Key | Action |
 | --- | --- |
 | `<Enter>` | Open the selected collection |
-| `<C-a>` | Create a draft document |
-| `<C-n>` | Create a collection |
-| `<C-d>` | Duplicate the selected collection |
-| `<C-r>` | Rename the selected collection |
-| `<C-t>` | Truncate the selected collection |
 | `<C-x>` | Open the actions menu |
 | `<C-b>` | Return to database selection when available |
 
@@ -322,18 +317,14 @@ Default document-picker actions:
 | Key | Action |
 | --- | --- |
 | `<Enter>` | Open the selected document |
-| `<C-a>` | Create a draft document |
-| `<C-y>` | Duplicate the selected document as a draft |
-| `<C-d>` | Delete the selected document |
 | `<C-o>` | Browse inferred relations |
 | `<C-f>` | Change the search field |
 | `<C-u>` | Reset the search |
 | `<C-p>` / `<C-n>` | Previous / next page |
-| `<C-t>` | Truncate the collection |
 | `<C-x>` | Open the actions menu |
 | `<C-b>` | Go back |
 
-Destructive operations request confirmation showing the target database and resource. Truncation uses an irreversible-action warning. Renaming, truncating, or deleting through an affected document buffer is refused while a matching ArangoDB buffer has unsaved changes. Picker action mappings are active in normal mode only, so they do not replace insertion-mode editing keys.
+Navigation and the actions menu are available in both normal and insert mode. Picker write mappings are disabled by default; create, duplicate, rename, delete, and truncate remain available from `<C-x>`. When explicitly configured, write mappings are normal-mode-only. Destructive operations request confirmation showing the target database and resource. Truncation uses an irreversible-action warning. Renaming, truncating, or deleting through an affected document buffer is refused while a matching ArangoDB buffer has unsaved changes.
 
 The collection actions menu also exposes index management and the JSON editor for mutable collection properties, including document validation schemas. Collection duplication copies supported creation properties and all non-system indexes before copying documents; a failed copy, or cancellation after target creation, removes the partially created target. A cleanup failure is reported explicitly.
 

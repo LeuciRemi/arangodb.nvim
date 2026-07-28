@@ -114,7 +114,7 @@ require("arangodb").setup({
 })
 ```
 
-Toutes les options et leurs valeurs par défaut figurent dans le [README anglais](README.md#configuration) et dans `:help arangodb.nvim`. Une touche peut être désactivée avec `false`. Les raccourcis globaux sont désactivés par défaut afin de respecter la configuration de chacun.
+Toutes les options et leurs valeurs par défaut figurent dans le [README anglais](README.md#configuration) et dans `:help arangodb.nvim`. Une touche peut être désactivée avec `false`. Les raccourcis globaux et les raccourcis d’écriture des pickers sont désactivés par défaut afin de respecter la configuration de chacun et de ne pas associer une mutation à une touche de saisie.
 
 `auto_discover` est volontairement désactivé par défaut. Lorsqu’il est activé, le plugin interroge `/_api/database/user` avec les variables `NVIM_ARANGO_HOST`, port, schéma et identifiants. Aucun accès réseau implicite n’a donc lieu pendant la complétion des commandes ou le healthcheck.
 
@@ -249,11 +249,6 @@ Touches par défaut du picker de collections :
 | Touche | Action |
 | --- | --- |
 | `<Entrée>` | Ouvrir la collection |
-| `<C-a>` | Créer un brouillon de document |
-| `<C-n>` | Créer une collection |
-| `<C-d>` | Dupliquer la collection |
-| `<C-r>` | Renommer la collection |
-| `<C-t>` | Vider la collection |
 | `<C-x>` | Ouvrir le menu d’actions |
 | `<C-b>` | Revenir au choix de la base lorsque disponible |
 
@@ -262,18 +257,14 @@ Touches par défaut du picker de documents :
 | Touche | Action |
 | --- | --- |
 | `<Entrée>` | Ouvrir le document |
-| `<C-a>` | Créer un brouillon |
-| `<C-y>` | Dupliquer comme brouillon |
-| `<C-d>` | Supprimer le document |
 | `<C-o>` | Parcourir les relations détectées |
 | `<C-f>` | Changer le champ de recherche |
 | `<C-u>` | Réinitialiser la recherche |
 | `<C-p>` / `<C-n>` | Page précédente / suivante |
-| `<C-t>` | Vider la collection |
 | `<C-x>` | Ouvrir le menu d’actions |
 | `<C-b>` | Revenir en arrière |
 
-Les opérations destructives demandent une confirmation qui affiche la base et la ressource ciblées ; la troncature comporte un avertissement d’irréversibilité. Le renommage, la troncature ou une suppression depuis un buffer concerné sont refusés si un buffer ArangoDB correspondant contient des changements non sauvegardés. Les raccourcis d’action des pickers ne sont actifs qu’en mode normal afin de préserver les touches de saisie du mode insertion.
+La navigation et le menu d’actions sont disponibles en modes normal et insertion. Les raccourcis d’écriture des pickers sont désactivés par défaut ; création, duplication, renommage, suppression et troncature restent disponibles via `<C-x>`. Lorsqu’ils sont configurés explicitement, les raccourcis d’écriture restent limités au mode normal. Les opérations destructives demandent une confirmation qui affiche la base et la ressource ciblées ; la troncature comporte un avertissement d’irréversibilité. Le renommage, la troncature ou une suppression depuis un buffer concerné sont refusés si un buffer ArangoDB correspondant contient des changements non sauvegardés.
 
 Le menu d’actions d’une collection permet aussi de gérer les index et d’éditer en JSON ses propriétés mutables, notamment le schéma de validation. La duplication crée les propriétés et index non système pris en charge avant de copier les documents ; un échec ou une annulation après la création de la cible supprime la collection partielle. Un échec de ce nettoyage est signalé explicitement.
 
