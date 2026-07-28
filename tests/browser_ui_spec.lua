@@ -60,4 +60,15 @@ return {
     ui.restore_backdrop({ layout = { root = root } })
     h.eq(true, dropped)
   end),
+
+  h.test("picker keymap merging ignores disabled mappings without dropping later ones", function()
+    local ui = require("arangodb.browser.ui")
+    local merged = ui.merge_keymaps(
+      ui.picker_key("<C-x>", "actions", { "n", "i" }, "Actions"),
+      ui.picker_key(false, "create", { "n" }, "Create"),
+      ui.picker_key("<C-p>", "previous", { "n", "i" }, "Previous")
+    )
+    h.eq("actions", merged["<C-x>"][1])
+    h.eq("previous", merged["<C-p>"][1])
+  end),
 }

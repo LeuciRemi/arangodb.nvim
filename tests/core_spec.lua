@@ -92,6 +92,21 @@ return {
     config.setup()
   end),
 
+  h.test("picker write mappings are disabled by default", function()
+    local picker_keymaps = require("arangodb.config").defaults.picker_keymaps
+    for _, name in ipairs({
+      "create",
+      "create_collection",
+      "duplicate_collection",
+      "delete",
+      "duplicate",
+      "truncate",
+      "rename",
+    }) do
+      h.eq(false, picker_keymaps[name], name)
+    end
+  end),
+
   h.test("structured connections resolve password providers only when used", function()
     local config = require("arangodb.config")
     local core = require("arangodb.core")

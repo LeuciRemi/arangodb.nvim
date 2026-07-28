@@ -2207,13 +2207,13 @@ browse_collections = function(config, opts, prev_picker)
     win = {
       input = {
         keys = merge_keymaps(
-          picker_key(keymaps.execute, "arango_action_menu", { "n" }, "Actions"),
+          picker_key(keymaps.execute, "arango_action_menu", { "n", "i" }, "Actions"),
           picker_key(keymaps.create, "arango_create_document", { "n" }, "Create Document"),
           picker_key(keymaps.create_collection, "arango_create_collection", { "n" }, "Create Collection"),
           picker_key(keymaps.duplicate_collection, "arango_duplicate_collection", { "n" }, "Duplicate Collection"),
           picker_key(keymaps.rename, "arango_rename_collection", { "n" }, "Rename Collection"),
           picker_key(keymaps.truncate, "arango_truncate_collection", { "n" }, "Truncate Collection"),
-          picker_key(keymaps.back, "arango_pick_database", { "n" }, "Choose Database", opts.allow_database_back)
+          picker_key(keymaps.back, "arango_pick_database", { "n", "i" }, "Choose Database", opts.allow_database_back)
         ),
       },
       list = {
@@ -2627,23 +2627,23 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
     win = {
       input = {
         keys = merge_keymaps(
-          picker_key(keymaps.execute, "arango_action_menu", { "n" }, "Actions"),
+          picker_key(keymaps.execute, "arango_action_menu", { "n", "i" }, "Actions"),
           picker_key(keymaps.create, "arango_create_document", { "n" }, "Create Document"),
           picker_key(keymaps.duplicate, "arango_duplicate_document", { "n" }, "Duplicate Document"),
-          picker_key(keymaps.prev_page, "arango_prev_page", { "n" }, "Previous Page"),
-          picker_key(keymaps.next_page, "arango_next_page", { "n" }, "Next Page"),
+          picker_key(keymaps.prev_page, "arango_prev_page", { "n", "i" }, "Previous Page"),
+          picker_key(keymaps.next_page, "arango_next_page", { "n", "i" }, "Next Page"),
           picker_key(
             keymaps.change_field,
             "arango_change_field",
-            { "n" },
+            { "n", "i" },
             "Change Filter Field",
             route_kind ~= "related"
           ),
-          picker_key(keymaps.reset, "arango_reset_search", { "n" }, "Reset Search"),
-          picker_key(keymaps.related, "arango_open_related", { "n" }, "Open Related"),
+          picker_key(keymaps.reset, "arango_reset_search", { "n", "i" }, "Reset Search"),
+          picker_key(keymaps.related, "arango_open_related", { "n", "i" }, "Open Related"),
           picker_key(keymaps.delete, "arango_delete_document", { "n" }, "Delete Document"),
           picker_key(keymaps.truncate, "arango_truncate_collection", { "n" }, "Truncate Collection"),
-          picker_key(keymaps.back, "arango_go_back", { "n" }, "Go Back")
+          picker_key(keymaps.back, "arango_go_back", { "n", "i" }, "Go Back")
         ),
       },
       list = {
