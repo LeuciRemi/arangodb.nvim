@@ -219,6 +219,137 @@ return {
     local original_snacks = package.loaded.snacks
     local picker_opts
     local inputs = 0
+    local edit_started = false
+    local edit_after_layout_close = false
+    local rename_after_layout_close = false
+    local layout_closed = false
+    local picker = {
+      closed = false,
+      opts = {},
+      input = { filter = { search = "" }, win = { win = vim.api.nvim_get_current_win() } },
+      find = function() end,
+      update_titles = function() end,
+      close = function(self)
+        self.closed = true
+        vim.schedule(function()
+          layout_closed = true
+        end)
+      end,
+    }
+
+    package.loaded["arangodb.browser.collection_admin"] = {
+      edit_properties = function()
+        edit_started = true
+        edit_after_layout_close = layout_closed
+      end,
+    }
+    package.loaded.snacks = {
+      picker = function(opts)
+        picker_opts = opts
+        picker.opts = opts
+        return picker
+      end,
+    }
+    vim.ui.input = function()
+      inputs = inputs + 1
+      rename_after_layout_close = layout_closed
+    end
+
+    local ok, err = xpcall(function()
+      with_browser({}, function(browser)
+        browser.open({ kind = "collections", config = config })
+        picker_opts.actions.arango_edit_collection_properties(picker, { item = { name = "items" } })
+        assert(
+          vim.wait(1000, function()
+            return edit_started
+          end),
+          "Collection property editor did not start"
+        )
+        h.eq(true, edit_after_layout_close)
+        h.eq(true, picker.closed)
+
+        picker.closed = false
+        layout_closed = false
+        picker_opts.actions.arango_rename_collection(picker, { item = { name = "items" } })
+        assert(
+          vim.wait(1000, function()
+            return inputs == 1
+          end),
+          "Collection rename prompt did not start"
+        )
+        h.eq(true, rename_after_layout_close)
+        h.eq(true, picker.closed)
+      end)
+    end, debug.traceback)
+
+    vim.ui.input = original_input
+    package.loaded.snacks = original_snacks
+    package.loaded["arangodb.browser.collection_admin"] = original_admin
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("index administration closes the collection picker before opening its workflow", function()
+    local original_admin = package.loaded["arangodb.browser.collection_admin"]
+    local original_snacks = package.loaded.snacks
+    local picker_opts
+    local managed = false
+    local managed_after_layout_close = false
+    local layout_closed = false
+    local picker = {
+      closed = false,
+      opts = {},
+      input = { filter = { search = "" }, win = { win = vim.api.nvim_get_current_win() } },
+      find = function() end,
+      close = function(self)
+        self.closed = true
+        vim.schedule(function()
+          layout_closed = true
+        end)
+      end,
+    }
+
+    package.loaded["arangodb.browser.collection_admin"] = {
+      manage_indexes = function()
+        managed = true
+        managed_after_layout_close = layout_closed
+      end,
+    }
+    package.loaded.snacks = {
+      picker = function(opts)
+        picker_opts = opts
+        picker.opts = opts
+        return picker
+      end,
+    }
+
+    local ok, err = xpcall(function()
+      with_browser({}, function(browser)
+        browser.open({ kind = "collections", config = config })
+        picker_opts.actions.arango_manage_indexes(picker, { item = { name = "items" } })
+        assert(
+          vim.wait(1000, function()
+            return managed
+          end),
+          "Index management workflow did not start"
+        )
+        h.eq(true, managed_after_layout_close)
+        h.eq(true, picker.closed)
+      end)
+    end, debug.traceback)
+
+    package.loaded.snacks = original_snacks
+    package.loaded["arangodb.browser.collection_admin"] = original_admin
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("going back to a document closes the current related picker", function()
+    local original_select = vim.ui.select
+    local original_snacks = package.loaded.snacks
+    local picker_opts
     local picker = {
       closed = false,
       opts = {},
@@ -230,9 +361,9 @@ return {
       end,
     }
 
-    package.loaded["arangodb.browser.collection_admin"] = {
-      edit_properties = function() end,
-    }
+    vim.ui.select = function(items, _, done)
+      done(items[1])
+    end
     package.loaded.snacks = {
       picker = function(opts)
         picker_opts = opts
@@ -240,26 +371,52 @@ return {
         return picker
       end,
     }
-    vim.ui.input = function()
-      inputs = inputs + 1
-    end
 
+    local document_buf
     local ok, err = xpcall(function()
-      with_browser({}, function(browser)
-        browser.open({ kind = "collections", config = config })
-        picker_opts.actions.arango_edit_collection_properties(picker, { item = { name = "items" } })
-        h.eq(true, picker.closed)
-
-        picker.closed = false
-        picker_opts.actions.arango_rename_collection(picker, { item = { name = "items" } })
-        h.eq(1, inputs)
+      with_browser({
+        list_collections_async = function(_, done)
+          done(nil, { "items" })
+        end,
+        browse_collection_async = function(_, _, _, _, _, _, done)
+          done(nil, {
+            total_count = 1,
+            has_more = false,
+            items = {
+              {
+                key = "a",
+                id = "items/a",
+                field = "_key",
+                field_value = "a",
+                field_value_text = "a",
+                preview = '{"_id":"items/a","_key":"a"}',
+              },
+            },
+          })
+        end,
+        get_document_async = function(_, _, done)
+          done(nil, document())
+        end,
+      }, function(browser)
+        local source = document()
+        source.document.related = { _id = "items/b" }
+        source.preview = nil
+        browser.open_document(config, source)
+        document_buf = vim.fn.bufnr("arangodb-buffer://test/items/a")
+        vim.api.nvim_buf_call(document_buf, function()
+          vim.cmd("ArangoDocumentRelated")
+        end)
+        picker_opts.on_show(picker)
+        browser.back()
         h.eq(true, picker.closed)
       end)
     end, debug.traceback)
 
-    vim.ui.input = original_input
+    if document_buf and vim.api.nvim_buf_is_valid(document_buf) then
+      vim.api.nvim_buf_delete(document_buf, { force = true })
+    end
+    vim.ui.select = original_select
     package.loaded.snacks = original_snacks
-    package.loaded["arangodb.browser.collection_admin"] = original_admin
     if not ok then
       error(err, 0)
     end

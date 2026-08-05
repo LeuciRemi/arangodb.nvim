@@ -171,6 +171,11 @@ end
 
 local close_picker = browser_ui.close_picker
 
+local function close_picker_then(picker, callback)
+  close_picker(picker)
+  vim.schedule(callback)
+end
+
 local function refresh_picker(picker, opts)
   browser_ui.refresh_picker(picker or state.picker, opts)
 end
@@ -533,30 +538,31 @@ local function rename_collection_with_prompt(config, collection, callback, picke
     return
   end
 
-  close_picker(picker)
-  vim.ui.input({
-    prompt = string.format("Rename collection %s to: ", collection),
-    default = collection,
-  }, function(value)
-    local new_name = value and vim.trim(value) or ""
-    if value == nil or new_name == "" or new_name == collection then
-      restore_picker_input_focus(picker)
-      return
-    end
-
-    local previous = collection
-    picker_request(picker, "ArangoDB Rename Collection", function(done)
-      return client.rename_collection_async(config, previous, new_name, done)
-    end, function(result)
-      local final_name = result.name or new_name
-      refresh_collection_document_buffers(config, previous, final_name)
-      if callback then
-        callback(result, final_name, previous)
+  close_picker_then(picker, function()
+    vim.ui.input({
+      prompt = string.format("Rename collection %s to: ", collection),
+      default = collection,
+    }, function(value)
+      local new_name = value and vim.trim(value) or ""
+      if value == nil or new_name == "" or new_name == collection then
+        restore_picker_input_focus(picker)
+        return
       end
-      restore_picker_input_focus(picker)
-    end, function(err)
-      arango.notify_error(err, "ArangoDB Rename Collection")
-      restore_picker_input_focus(picker)
+
+      local previous = collection
+      picker_request(picker, "ArangoDB Rename Collection", function(done)
+        return client.rename_collection_async(config, previous, new_name, done)
+      end, function(result)
+        local final_name = result.name or new_name
+        refresh_collection_document_buffers(config, previous, final_name)
+        if callback then
+          callback(result, final_name, previous)
+        end
+        restore_picker_input_focus(picker)
+      end, function(err)
+        arango.notify_error(err, "ArangoDB Rename Collection")
+        restore_picker_input_focus(picker)
+      end)
     end)
   end)
 end
@@ -1349,7 +1355,9 @@ local function open_route(route, prev_picker)
     start_async("ArangoDB", function(done)
       return client.get_document_async(route.config, route.id, done)
     end, function(payload)
-      M.open_document(route.config, payload)
+      close_picker_then(prev_picker, function()
+        M.open_document(route.config, payload)
+      end)
     end)
     return
   end
@@ -1385,7 +1393,7 @@ end
 
 --- Global entry point for :ArangoBack.
 function M.back()
-  go_back(nil)
+  go_back(state.picker)
 end
 
 local function jump_to_related(config, relation, current, context)
@@ -1987,8 +1995,9 @@ browse_collections = function(config, opts, prev_picker)
 
     push_history(collections_route(config, opts, current_search(current)))
     push_history(collection_route(config, collection, opts.document_field or "_key", opts.document_search or ""))
-    close_picker(current)
-    open_new_document(config, collection)
+    close_picker_then(current, function()
+      open_new_document(config, collection)
+    end)
   end
 
   local function open_action_menu(current, item)
@@ -2045,11 +2054,12 @@ browse_collections = function(config, opts, prev_picker)
       return
     end
 
-    close_picker(current)
-    M.open({
-      field = opts.document_field or "_key",
-      search = opts.document_search or "",
-    })
+    close_picker_then(current, function()
+      M.open({
+        field = opts.document_field or "_key",
+        search = opts.document_search or "",
+      })
+    end)
   end
 
   local picker
@@ -2182,9 +2192,11 @@ browse_collections = function(config, opts, prev_picker)
           vim.notify("Select a collection first", vim.log.levels.INFO)
           return
         end
-        collection_admin.manage_indexes(config, collection, function()
-          clear_collection_overview()
-          refresh_picker(current)
+        close_picker_then(current, function()
+          collection_admin.manage_indexes(config, collection, function()
+            clear_collection_overview()
+            refresh_picker(current)
+          end)
         end)
       end,
       arango_edit_collection_properties = function(current, item)
@@ -2193,10 +2205,11 @@ browse_collections = function(config, opts, prev_picker)
           vim.notify("Select a collection first", vim.log.levels.INFO)
           return
         end
-        close_picker(current)
-        collection_admin.edit_properties(config, collection, function()
-          clear_collection_overview()
-          refresh_picker(current)
+        close_picker_then(current, function()
+          collection_admin.edit_properties(config, collection, function()
+            clear_collection_overview()
+            refresh_picker(current)
+          end)
         end)
       end,
       arango_pick_database = function(current)
@@ -2291,8 +2304,9 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
       return client.get_document_async(config, selected.item.id, done)
     end, function(payload)
       push_history(current_route())
-      close_picker(current)
-      M.open_document(config, vim.tbl_extend("force", payload, { database = config.database }))
+      close_picker_then(current, function()
+        M.open_document(config, vim.tbl_extend("force", payload, { database = config.database }))
+      end)
     end)
   end
 
@@ -2516,14 +2530,16 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
           return client.get_document_async(config, selected.item.id, done)
         end, function(payload)
           push_history(current_route())
-          close_picker(current)
-          open_duplicate_document(config, collection, payload.document or payload)
+          close_picker_then(current, function()
+            open_duplicate_document(config, collection, payload.document or payload)
+          end)
         end)
       end,
       arango_create_document = function(current)
         push_history(current_route())
-        close_picker(current)
-        open_new_document(config, collection)
+        close_picker_then(current, function()
+          open_new_document(config, collection)
+        end)
       end,
       arango_truncate_collection = function(current)
         truncate_collection_with_prompt(config, collection, function()
@@ -2585,8 +2601,9 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
         if not selected or not selected.item then
           return
         end
-        close_picker(current)
-        require("arangodb.graph").open({ config = config, start = selected.item.id })
+        close_picker_then(current, function()
+          require("arangodb.graph").open({ config = config, start = selected.item.id })
+        end)
       end,
       arango_delete_document = function(current, item)
         local selected = picker_current_item(current, item)
