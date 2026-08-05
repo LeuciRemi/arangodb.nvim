@@ -121,6 +121,21 @@ package.loaded["arangodb.client"] = {
     end)
     return { cancel = function() end }
   end,
+  get_document_async = function(_, id, done)
+    local collection, key = id:match("^([^/]+)/(.+)$")
+    vim.schedule(function()
+      done(nil, {
+        database = "test",
+        id = id,
+        key = key,
+        collection = collection,
+        document = { _id = id, _key = key },
+        preview = vim.json.encode({ _id = id, _key = key }),
+        show = true,
+      })
+    end)
+    return { cancel = function() end }
+  end,
   close_cursor_async = function() end,
 }
 
@@ -207,7 +222,23 @@ assert_actions_unmapped(document_picker, {
   "arango_truncate_collection",
 })
 
-require("snacks.picker.core.picker").get()[1]:close()
+document_picker.opts.actions.arango_open_document(document_picker, { item = { id = "items/one" } })
+assert(
+  vim.wait(1000, function()
+    return #require("snacks.picker.core.picker").get() == 0
+      and vim.api.nvim_buf_get_name(0) == "arangodb-buffer://test/items/one"
+  end),
+  "Real Snacks document handoff did not remove the picker before activating the buffer"
+)
+local document_buf = vim.api.nvim_get_current_buf()
+assert(not document_picker.layout or not document_picker.layout.root or not document_picker.layout.root.win)
+document_picker = nil
+vim.api.nvim_buf_delete(document_buf, { force = true })
+
+local active_document_picker = require("snacks.picker.core.picker").get()[1]
+if active_document_picker then
+  active_document_picker:close()
+end
 require("arangodb").setup({
   connections = { test = "http://localhost:8529/test" },
   default_database = "test",

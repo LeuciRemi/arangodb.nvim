@@ -2,6 +2,17 @@
 
 All notable changes to arangodb.nvim are documented here.
 
+## [0.6.1] - 2026-08-05
+
+### Fixed
+
+- Picker-to-UI transitions now wait for Snacks to destroy the previous layout before opening document buffers, editors, graph views, database pickers, or navigating back, preventing residual popups and backdrop flicker.
+
+### Tests
+
+- Added lifecycle-aware picker mocks and regression coverage for document, collection, graph, database, cancellation, and error handoffs.
+- Added a headless smoke test using the real Snacks runtime for picker-to-document-buffer transitions.
+
 ## [0.6.0] - 2026-08-05
 
 ### Added
@@ -26,4 +37,5 @@ All notable changes to arangodb.nvim are documented here.
 
 - Collection editor transitions close the active picker cleanly and no longer recreate an existing Snacks backdrop, preventing background flicker.
 
+[0.6.1]: https://github.com/LeuciRemi/arangodb.nvim/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/LeuciRemi/arangodb.nvim/compare/v0.5.2...v0.6.0
