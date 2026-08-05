@@ -47,7 +47,7 @@ function M.restore_backdrop(picker)
     return
   end
   local root = picker.layout.root
-  if root.opts and root.opts.backdrop and type(root.drop) == "function" then
+  if root.opts and root.opts.backdrop and not root.backdrop and type(root.drop) == "function" then
     pcall(root.drop, root)
   end
 end

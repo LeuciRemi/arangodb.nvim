@@ -59,6 +59,15 @@ return {
     }
     ui.restore_backdrop({ layout = { root = root } })
     h.eq(true, dropped)
+
+    dropped = false
+    root.backdrop = {
+      valid = function()
+        return true
+      end,
+    }
+    ui.restore_backdrop({ layout = { root = root } })
+    h.eq(false, dropped)
   end),
 
   h.test("picker keymap merging ignores disabled mappings without dropping later ones", function()

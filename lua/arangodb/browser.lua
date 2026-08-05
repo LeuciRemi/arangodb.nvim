@@ -533,6 +533,7 @@ local function rename_collection_with_prompt(config, collection, callback, picke
     return
   end
 
+  close_picker(picker)
   vim.ui.input({
     prompt = string.format("Rename collection %s to: ", collection),
     default = collection,
@@ -2192,6 +2193,7 @@ browse_collections = function(config, opts, prev_picker)
           vim.notify("Select a collection first", vim.log.levels.INFO)
           return
         end
+        close_picker(current)
         collection_admin.edit_properties(config, collection, function()
           clear_collection_overview()
           refresh_picker(current)

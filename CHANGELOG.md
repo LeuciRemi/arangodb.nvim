@@ -2,7 +2,7 @@
 
 All notable changes to arangodb.nvim are documented here.
 
-## [0.6.0] - Unreleased
+## [0.6.0] - 2026-08-05
 
 ### Added
 
@@ -21,5 +21,9 @@ All notable changes to arangodb.nvim are documented here.
 - Collection duplication now rolls back the target if a property, index, or document-copy step fails or if the operation is cancelled after target creation.
 - AQL exports require confirmation before overwrite and use atomic file replacement.
 - Picker navigation and the actions menu work in normal and insert mode, while write mappings are unset by default and remain normal-mode-only when configured. Graph-buffer mappings are configurable.
+
+### Fixed
+
+- Collection editor transitions close the active picker cleanly and no longer recreate an existing Snacks backdrop, preventing background flicker.
 
 [0.6.0]: https://github.com/LeuciRemi/arangodb.nvim/compare/v0.5.2...v0.6.0

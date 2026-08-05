@@ -213,6 +213,58 @@ return {
     end
   end),
 
+  h.test("collection editor transitions close the active picker", function()
+    local original_admin = package.loaded["arangodb.browser.collection_admin"]
+    local original_input = vim.ui.input
+    local original_snacks = package.loaded.snacks
+    local picker_opts
+    local inputs = 0
+    local picker = {
+      closed = false,
+      opts = {},
+      input = { filter = { search = "" }, win = { win = vim.api.nvim_get_current_win() } },
+      find = function() end,
+      update_titles = function() end,
+      close = function(self)
+        self.closed = true
+      end,
+    }
+
+    package.loaded["arangodb.browser.collection_admin"] = {
+      edit_properties = function() end,
+    }
+    package.loaded.snacks = {
+      picker = function(opts)
+        picker_opts = opts
+        picker.opts = opts
+        return picker
+      end,
+    }
+    vim.ui.input = function()
+      inputs = inputs + 1
+    end
+
+    local ok, err = xpcall(function()
+      with_browser({}, function(browser)
+        browser.open({ kind = "collections", config = config })
+        picker_opts.actions.arango_edit_collection_properties(picker, { item = { name = "items" } })
+        h.eq(true, picker.closed)
+
+        picker.closed = false
+        picker_opts.actions.arango_rename_collection(picker, { item = { name = "items" } })
+        h.eq(1, inputs)
+        h.eq(true, picker.closed)
+      end)
+    end, debug.traceback)
+
+    vim.ui.input = original_input
+    package.loaded.snacks = original_snacks
+    package.loaded["arangodb.browser.collection_admin"] = original_admin
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
   h.test("revision conflicts can be explicitly force-overwritten", function()
     local calls = {}
     local original_select = vim.ui.select
