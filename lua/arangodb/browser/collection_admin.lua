@@ -95,7 +95,32 @@ local function create_index(config, collection, on_change)
   })
 end
 
-local function inspect_index(config, collection, index, on_change)
+local function delete_index(config, collection, index, on_change, on_back)
+  if index.type == "primary" or index.type == "edge" then
+    vim.notify("ArangoDB system indexes cannot be deleted", vim.log.levels.WARN)
+    return
+  end
+  if
+    vim.fn.confirm(
+      string.format("Delete index %s from %s/%s?", index.name or index.id, config.database, collection),
+      "&Delete\n&Cancel",
+      2
+    ) ~= 1
+  then
+    return
+  end
+  request("ArangoDB Delete Index", function(done)
+    return client.delete_index_async(config, index.id, done)
+  end, function()
+    vim.notify("Index deleted", vim.log.levels.INFO)
+    if on_change then
+      on_change()
+    end
+    M.manage_indexes(config, collection, on_change, on_back)
+  end)
+end
+
+local function inspect_index(config, collection, index, on_change, on_back)
   vim.ui.select(
     { "Inspect JSON", "Delete index" },
     ui.select_options({
@@ -111,42 +136,65 @@ local function inspect_index(config, collection, index, on_change)
         })
         return
       end
-      if action ~= "Delete index" then
-        return
+      if action == "Delete index" then
+        delete_index(config, collection, index, on_change, on_back)
       end
-      if index.type == "primary" or index.type == "edge" then
-        vim.notify("ArangoDB system indexes cannot be deleted", vim.log.levels.WARN)
-        return
-      end
-      if
-        vim.fn.confirm(
-          string.format("Delete index %s from %s/%s?", index.name or index.id, config.database, collection),
-          "&Delete\n&Cancel",
-          2
-        ) ~= 1
-      then
-        return
-      end
-      request("ArangoDB Delete Index", function(done)
-        return client.delete_index_async(config, index.id, done)
-      end, function()
-        vim.notify("Index deleted", vim.log.levels.INFO)
-        if on_change then
-          on_change()
-        end
-        M.manage_indexes(config, collection, on_change)
-      end)
     end
   )
 end
 
 --- Browse indexes and create, inspect, or delete them.
-function M.manage_indexes(config, collection, on_change)
+function M.manage_indexes(config, collection, on_change, on_back)
   return request("ArangoDB Indexes", function(done)
     return client.list_indexes_async(config, collection, done)
   end, function(indexes)
     local items = { { create = true } }
+    local keymaps = require("arangodb.config").get().picker_keymaps or {}
+    local execute = keymaps.execute
+    local input_execute = ui.picker_key(execute, "arango_action_menu", { "n", "i" }, "Actions")
+    local list_execute = ui.picker_key(execute, "arango_action_menu", { "n" }, "Actions")
     vim.list_extend(items, indexes)
+
+    local function open_action_menu(picker)
+      local current = picker:current()
+      local index = current and current.item
+      local choices = {}
+      if index and not index.create then
+        choices[#choices + 1] = { label = "Inspect JSON", action = "inspect" }
+        choices[#choices + 1] = { label = "Delete index", action = "delete" }
+      end
+      choices[#choices + 1] = { label = "Create index", action = "create" }
+
+      picker.opts.on_close = nil
+      picker:close()
+      vim.schedule(function()
+        vim.ui.select(
+          choices,
+          ui.select_options({
+            prompt = string.format("Index actions (%s/%s)", config.database, collection),
+            format_item = function(choice)
+              return choice.label
+            end,
+          }),
+          function(choice)
+            if not choice then
+              M.manage_indexes(config, collection, on_change, on_back)
+              return
+            end
+            vim.schedule(function()
+              if choice.action == "create" then
+                create_index(config, collection, on_change)
+              elseif choice.action == "inspect" and index then
+                inspect_index(config, collection, index, on_change, on_back)
+              elseif choice.action == "delete" and index then
+                delete_index(config, collection, index, on_change, on_back)
+              end
+            end)
+          end
+        )
+      end)
+    end
+
     vim.ui.select(
       items,
       ui.select_options({
@@ -154,15 +202,28 @@ function M.manage_indexes(config, collection, on_change)
         format_item = function(item)
           return item.create and "+ Create index" or index_label(item)
         end,
+        snacks = {
+          auto_close = false,
+          actions = {
+            arango_action_menu = open_action_menu,
+          },
+          win = {
+            input = { keys = input_execute },
+            list = { keys = list_execute },
+          },
+        },
       }),
       function(choice)
         if not choice then
+          if on_back then
+            on_back()
+          end
           return
         end
         if choice.create then
           create_index(config, collection, on_change)
         else
-          inspect_index(config, collection, choice, on_change)
+          inspect_index(config, collection, choice, on_change, on_back)
         end
       end
     )

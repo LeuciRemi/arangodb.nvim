@@ -511,6 +511,13 @@ Destructive operations request confirmation with the target database and
 resource. Renaming, truncating, or deleting is refused while a matching
 ArangoDB buffer has unsaved changes.
 
+The collection and document actions menus expose index management. The
+collection actions menu also provides the JSON editor for mutable collection
+properties, including validation schemas. The index selector uses the
+configured picker action mapping (<C-x> by default) for creating, inspecting,
+and deleting indexes. <Esc> returns from the action menu to the index selector,
+then from the index selector to the previous collection or document picker.
+
 ===============================================================================
 LUA API                                                    *arangodb.nvim-api*
 

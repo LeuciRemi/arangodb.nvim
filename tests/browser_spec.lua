@@ -642,16 +642,17 @@ return {
     end
   end),
 
-  h.test("index administration closes the collection picker before opening its workflow", function()
+  h.test("index administration returns to the collection picker when cancelled", function()
     local original_admin = package.loaded["arangodb.browser.collection_admin"]
     local picker
     local managed = false
     local managed_after_layout_close = false
 
     package.loaded["arangodb.browser.collection_admin"] = {
-      manage_indexes = function()
+      manage_indexes = function(_, _, _, on_back)
         managed = true
         managed_after_layout_close = picker.layout_closed
+        on_back()
       end,
     }
 
@@ -663,14 +664,54 @@ return {
           picker.opts.actions.arango_manage_indexes(picker, { item = { name = "items" } })
           assert(
             vim.wait(1000, function()
-              return managed
+              return managed and harness.active_count() == 1 and harness.last() ~= picker
             end),
             "Index management workflow did not start"
           )
           h.eq(true, managed_after_layout_close)
           h.eq(true, picker.closed)
           h.eq(true, picker.layout_closed)
-          h.eq(0, harness.active_count())
+          h.eq(1, harness.active_count())
+        end)
+      end)
+    end, debug.traceback)
+
+    package.loaded["arangodb.browser.collection_admin"] = original_admin
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("index administration is available from the document picker", function()
+    local original_admin = package.loaded["arangodb.browser.collection_admin"]
+    local picker
+    local managed = false
+    local managed_after_layout_close = false
+
+    package.loaded["arangodb.browser.collection_admin"] = {
+      manage_indexes = function(_, _, _, on_back)
+        managed = true
+        managed_after_layout_close = picker.layout_closed
+        on_back()
+      end,
+    }
+
+    local ok, err = xpcall(function()
+      with_picker_harness(function(harness)
+        with_browser({}, function(browser)
+          browser.open({ kind = "collection", config = config, collection = "items", field = "_key" })
+          picker = harness.last()
+          picker.opts.actions.arango_manage_indexes(picker)
+          assert(
+            vim.wait(1000, function()
+              return managed and harness.active_count() == 1 and harness.last() ~= picker
+            end),
+            "Index management workflow did not start from the document picker"
+          )
+          h.eq(true, managed_after_layout_close)
+          h.eq(true, picker.closed)
+          h.eq(true, picker.layout_closed)
+          h.eq(1, harness.active_count())
         end)
       end)
     end, debug.traceback)

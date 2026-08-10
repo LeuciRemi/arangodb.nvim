@@ -136,6 +136,14 @@ package.loaded["arangodb.client"] = {
     end)
     return { cancel = function() end }
   end,
+  list_indexes_async = function(_, collection, done)
+    vim.schedule(function()
+      done(nil, {
+        { id = collection .. "/0", name = "primary", type = "primary", fields = { "_key" } },
+      })
+    end)
+    return { cancel = function() end }
+  end,
   close_cursor_async = function() end,
 }
 
@@ -190,6 +198,59 @@ assert(
   "Snacks collection preview did not render database totals"
 )
 
+collection_picker.opts.actions.arango_action_menu(collection_picker, { item = { name = "items" } })
+assert(
+  vim.wait(1000, function()
+    local pickers = require("snacks.picker.core.picker").get()
+    return #pickers == 2 and pickers[2].title == "Collection actions (test)"
+  end),
+  "Collection action menu did not open"
+)
+local collection_action_picker = require("snacks.picker.core.picker").get()[2]
+local manage_indexes_item
+for _, item in ipairs(collection_action_picker.finder.items) do
+  if item.item and item.item.action == "arango_manage_indexes" then
+    manage_indexes_item = item
+    break
+  end
+end
+assert(manage_indexes_item, "Collection action menu did not contain index management")
+collection_action_picker.opts.actions.confirm(collection_action_picker, manage_indexes_item)
+assert(
+  vim.wait(1000, function()
+    local pickers = require("snacks.picker.core.picker").get()
+    return #pickers == 1 and pickers[1].title == "Indexes (test/items)"
+  end),
+  "Index picker did not replace the collection action menu"
+)
+local collection_index_picker = require("snacks.picker.core.picker").get()[1]
+vim.api.nvim_feedkeys(vim.keycode("<C-x>"), "mx", false)
+assert(
+  vim.wait(1000, function()
+    local pickers = require("snacks.picker.core.picker").get()
+    return #pickers == 1 and pickers[1] ~= collection_index_picker and pickers[1].title == "Index actions (test/items)"
+  end),
+  "Index action menu did not open from the collection picker"
+)
+local collection_index_action_picker = require("snacks.picker.core.picker").get()[1]
+collection_index_action_picker:close()
+assert(
+  vim.wait(1000, function()
+    local pickers = require("snacks.picker.core.picker").get()
+    return #pickers == 1 and pickers[1] ~= collection_index_action_picker and pickers[1].title == "Indexes (test/items)"
+  end),
+  "Closing the collection index action menu did not restore the index picker"
+)
+collection_index_picker = require("snacks.picker.core.picker").get()[1]
+collection_index_picker:close()
+assert(
+  vim.wait(1000, function()
+    local pickers = require("snacks.picker.core.picker").get()
+    return #pickers == 1 and pickers[1] ~= collection_index_picker and pickers[1].title:match("Arango test") ~= nil
+  end),
+  "Closing the collection index picker did not restore the collection picker"
+)
+
 require("snacks.picker.core.picker").get()[1]:close()
 require("arangodb.browser").open({
   kind = "collection",
@@ -220,7 +281,45 @@ assert_actions_unmapped(document_picker, {
   "arango_duplicate_document",
   "arango_delete_document",
   "arango_truncate_collection",
+  "arango_manage_indexes",
 })
+
+document_picker.opts.actions.arango_manage_indexes(document_picker)
+assert(
+  vim.wait(1000, function()
+    local pickers = require("snacks.picker.core.picker").get()
+    return #pickers == 1 and pickers[1] ~= document_picker and pickers[1].title == "Indexes (test/items)"
+  end),
+  "Index picker did not replace the document picker"
+)
+local index_picker = require("snacks.picker.core.picker").get()[1]
+index_picker.opts.actions.arango_action_menu(index_picker)
+assert(
+  vim.wait(1000, function()
+    local pickers = require("snacks.picker.core.picker").get()
+    return #pickers == 1 and pickers[1] ~= index_picker and pickers[1].title == "Index actions (test/items)"
+  end),
+  "Index action menu did not replace the index picker"
+)
+local index_action_picker = require("snacks.picker.core.picker").get()[1]
+index_action_picker:close()
+assert(
+  vim.wait(1000, function()
+    local pickers = require("snacks.picker.core.picker").get()
+    return #pickers == 1 and pickers[1] ~= index_action_picker and pickers[1].title == "Indexes (test/items)"
+  end),
+  "Closing the index action menu did not restore the index picker"
+)
+index_picker = require("snacks.picker.core.picker").get()[1]
+index_picker:close()
+assert(
+  vim.wait(1000, function()
+    local pickers = require("snacks.picker.core.picker").get()
+    return #pickers == 1 and pickers[1] ~= index_picker and pickers[1].title:match("Arango test/items") ~= nil
+  end),
+  "Closing the index picker did not restore the document picker"
+)
+document_picker = require("snacks.picker.core.picker").get()[1]
 
 document_picker.opts.actions.arango_open_document(document_picker, { item = { id = "items/one" } })
 assert(
