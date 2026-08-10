@@ -116,4 +116,99 @@ return {
     h.eq(false, updated.value.waitForSync)
     h.eq(nil, updated.value.ignored)
   end),
+
+  h.test("cancelling the index picker invokes its back callback", function()
+    local original_select = vim.ui.select
+    local backed = false
+    vim.ui.select = function(_, opts, done)
+      h.eq(nil, opts.snacks.win.input.keys["<C-b>"])
+      h.eq(nil, opts.snacks.win.list.keys["<C-b>"])
+      h.eq("arango_action_menu", opts.snacks.win.input.keys["<C-x>"][1])
+      h.eq("arango_action_menu", opts.snacks.win.list.keys["<C-x>"][1])
+      h.eq("function", type(opts.snacks.actions.arango_action_menu))
+      done(nil)
+    end
+
+    local ok, err = xpcall(function()
+      with_admin({
+        list_indexes_async = function(_, _, done)
+          done(nil, {})
+        end,
+      }, { open = function() end }, function(admin)
+        admin.manage_indexes(config, "items", nil, function()
+          backed = true
+        end)
+      end)
+    end, debug.traceback)
+    vim.ui.select = original_select
+    if not ok then
+      error(err, 0)
+    end
+    h.eq(true, backed)
+  end),
+
+  h.test("the index action mapping opens its action menu after closing the index picker", function()
+    local original_select = vim.ui.select
+    local action_items
+    local action_menu
+    local index_picker_count = 0
+    local index_done
+    local backed = 0
+    local picker = {
+      closed = false,
+      opts = {
+        on_close = function()
+          index_done(nil)
+        end,
+      },
+      current = function()
+        return { item = { id = "items/by_email", name = "by_email", type = "persistent" } }
+      end,
+      close = function(self)
+        self.closed = true
+        if self.opts.on_close then
+          self.opts.on_close()
+        end
+      end,
+    }
+    vim.ui.select = function(items, opts, done)
+      if opts.prompt == "Indexes (test/items)" then
+        index_picker_count = index_picker_count + 1
+        action_menu = opts.snacks.actions.arango_action_menu
+        index_done = done
+      elseif opts.prompt == "Index actions (test/items)" then
+        action_items = items
+        done(nil)
+      end
+    end
+
+    local ok, err = xpcall(function()
+      with_admin({
+        list_indexes_async = function(_, _, done)
+          done(nil, { { id = "items/by_email", name = "by_email", type = "persistent" } })
+        end,
+      }, { open = function() end }, function(admin)
+        admin.manage_indexes(config, "items", nil, function()
+          backed = backed + 1
+        end)
+      end)
+      action_menu(picker)
+      assert(
+        vim.wait(1000, function()
+          return action_items ~= nil and index_picker_count == 2
+        end),
+        "Index action menu did not open"
+      )
+    end, debug.traceback)
+    vim.ui.select = original_select
+    if not ok then
+      error(err, 0)
+    end
+    h.eq(true, picker.closed)
+    h.eq(nil, picker.opts.on_close)
+    h.eq(0, backed)
+    h.eq("Inspect JSON", action_items[1].label)
+    h.eq("Delete index", action_items[2].label)
+    h.eq("Create index", action_items[3].label)
+  end),
 }

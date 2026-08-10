@@ -2192,10 +2192,13 @@ browse_collections = function(config, opts, prev_picker)
           vim.notify("Select a collection first", vim.log.levels.INFO)
           return
         end
+        local route = collections_route(config, opts, current_search(current))
         close_picker_then(current, function()
           collection_admin.manage_indexes(config, collection, function()
             clear_collection_overview()
             refresh_picker(current)
+          end, function()
+            open_route(route)
           end)
         end)
       end,
@@ -2328,6 +2331,7 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
       { label = action_label("Create document", keymaps.create), action = "arango_create_document" }
     choices[#choices + 1] =
       { label = action_label("Truncate collection", keymaps.truncate), action = "arango_truncate_collection" }
+    choices[#choices + 1] = { label = "Manage indexes", action = "arango_manage_indexes" }
 
     if route_kind ~= "related" then
       choices[#choices + 1] =
@@ -2547,6 +2551,16 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
           refresh_picker(current)
           vim.notify(string.format("Collection %s truncated", collection), vim.log.levels.INFO)
         end, current)
+      end,
+      arango_manage_indexes = function(current)
+        local route = current_route()
+        close_picker_then(current, function()
+          collection_admin.manage_indexes(config, collection, function()
+            refresh_picker(current)
+          end, function()
+            open_route(route)
+          end)
+        end)
       end,
       arango_next_page = function(current)
         if not meta.has_more then

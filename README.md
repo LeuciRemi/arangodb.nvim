@@ -326,7 +326,7 @@ Default document-picker actions:
 
 Navigation and the actions menu are available in both normal and insert mode. Picker write mappings are disabled by default; create, duplicate, rename, delete, and truncate remain available from `<C-x>`. When explicitly configured, write mappings are normal-mode-only. Destructive operations request confirmation showing the target database and resource. Truncation uses an irreversible-action warning. Renaming, truncating, or deleting through an affected document buffer is refused while a matching ArangoDB buffer has unsaved changes.
 
-The collection actions menu also exposes index management and the JSON editor for mutable collection properties, including document validation schemas. Collection duplication copies supported creation properties and all non-system indexes before copying documents; a failed copy, or cancellation after target creation, removes the partially created target. A cleanup failure is reported explicitly.
+The collection and document actions menus expose index management. The index selector uses the configured picker action mapping (`<C-x>` by default) for index creation, JSON inspection, and deletion. `<Esc>` returns from the action menu to the index selector, then from the index selector to the previous collection or document picker. The collection actions menu also exposes the JSON editor for mutable collection properties, including document validation schemas. Collection duplication copies supported creation properties and all non-system indexes before copying documents; a failed copy, or cancellation after target creation, removes the partially created target. A cleanup failure is reported explicitly.
 
 ### Required ArangoDB permissions
 
