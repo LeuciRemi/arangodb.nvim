@@ -45,6 +45,7 @@ function M.edit_properties(config, collection, on_change)
     return client.collection_properties_async(config, collection, done)
   end, function(properties)
     editor.open({
+      config = config,
       name = string.format("arangodb-collection-properties://%s/%s", config.database, collection),
       title = "ArangoDB Collection Properties",
       value = select_properties(properties),
@@ -75,6 +76,7 @@ end
 
 local function create_index(config, collection, on_change)
   editor.open({
+    config = config,
     name = string.format("arangodb-index-draft://%s/%s", config.database, collection),
     title = "ArangoDB Create Index",
     value = {
@@ -129,6 +131,7 @@ local function inspect_index(config, collection, index, on_change, on_back)
     function(action)
       if action == "Inspect JSON" then
         editor.open({
+          config = config,
           name = string.format("arangodb-index://%s/%s/%s", config.database, collection, index.id or index.name),
           title = "ArangoDB Index",
           value = index,

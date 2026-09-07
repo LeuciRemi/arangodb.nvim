@@ -3,6 +3,7 @@ local M = {}
 
 local utils = require("arangodb.utils")
 local editors = {}
+local pending = {}
 
 local function set_value(buf, value)
   local modifiable = vim.bo[buf].modifiable
@@ -25,8 +26,19 @@ end
 function M.open(opts)
   opts = opts or {}
   local name = assert(opts.name, "JSON editor name is required")
+  if opts.config then
+    name = utils.connection_buffer_name(name, opts.config)
+  end
   local buf = vim.fn.bufadd(name)
+  vim.bo[buf].swapfile = false
   vim.fn.bufload(buf)
+  if editors[buf] and (vim.bo[buf].modified or pending[buf]) then
+    vim.cmd("buffer " .. buf)
+    return buf
+  end
+  if opts.config then
+    vim.b[buf].arangodb_connection_id = utils.connection_id(opts.config)
+  end
   editors[buf] = opts
   set_value(buf, opts.value or vim.empty_dict())
   vim.bo[buf].filetype = "json"
@@ -57,14 +69,17 @@ function M.open(opts)
           return
         end
         local completed = false
+        local changedtick = vim.api.nvim_buf_get_changedtick(buf)
+        pending[buf] = true
         local started, handle = pcall(current.on_save, value, function(err, saved)
           completed = true
           active_request = nil
+          pending[buf] = nil
           if err then
             require("arangodb.core").notify_error(err, current.title)
             return
           end
-          if vim.api.nvim_buf_is_valid(buf) then
+          if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_changedtick(buf) == changedtick then
             set_value(buf, current.normalize and current.normalize(saved, value) or value)
           end
           vim.notify(current.success_message or "ArangoDB metadata updated", vim.log.levels.INFO)
@@ -73,6 +88,7 @@ function M.open(opts)
           end
         end)
         if not started then
+          pending[buf] = nil
           require("arangodb.core").notify_error(handle, current.title)
         elseif not completed then
           active_request = handle
@@ -88,6 +104,7 @@ function M.open(opts)
           active_request.cancel()
         end
         active_request = nil
+        pending[buf] = nil
         editors[buf] = nil
       end,
     })
