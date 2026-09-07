@@ -28,6 +28,7 @@
 :ArangoResume	arangodb.nvim.txt	/*:ArangoResume*
 arangodb.nvim-api	arangodb.nvim.txt	/*arangodb.nvim-api*
 arangodb.nvim-aql	arangodb.nvim.txt	/*arangodb.nvim-aql*
+arangodb.nvim-aql-example	arangodb.nvim.txt	/*arangodb.nvim-aql-example*
 arangodb.nvim-commands	arangodb.nvim.txt	/*arangodb.nvim-commands*
 arangodb.nvim-configuration	arangodb.nvim.txt	/*arangodb.nvim-configuration*
 arangodb.nvim-connections	arangodb.nvim.txt	/*arangodb.nvim-connections*
@@ -39,6 +40,8 @@ arangodb.nvim-installation	arangodb.nvim.txt	/*arangodb.nvim-installation*
 arangodb.nvim-intro	arangodb.nvim.txt	/*arangodb.nvim-intro*
 arangodb.nvim-mappings	arangodb.nvim.txt	/*arangodb.nvim-mappings*
 arangodb.nvim-options	arangodb.nvim.txt	/*arangodb.nvim-options*
+arangodb.nvim-quickstart	arangodb.nvim.txt	/*arangodb.nvim-quickstart*
 arangodb.nvim-requirements	arangodb.nvim.txt	/*arangodb.nvim-requirements*
 arangodb.nvim-setup	arangodb.nvim.txt	/*arangodb.nvim-setup*
+arangodb.nvim-troubleshooting	arangodb.nvim.txt	/*arangodb.nvim-troubleshooting*
 arangodb.nvim.txt	arangodb.nvim.txt	/*arangodb.nvim.txt*

@@ -1,0 +1,11 @@
+name: arangodb-nvim-demo
+services:
+  arangodb:
+    image: arangodb:3.12.5
+    environment:
+      ARANGO_ROOT_PASSWORD: demo-only
+    ports:
+      - "127.0.0.1:18529:8529"
+    tmpfs:
+      - /var/lib/arangodb3
+      - /var/lib/arangodb3-apps
