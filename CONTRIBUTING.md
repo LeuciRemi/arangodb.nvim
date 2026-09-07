@@ -25,6 +25,10 @@ The unit suite runs on Neovim 0.10.4 and the current stable version in CI. Forma
 ARANGODB_TEST_URL=http://127.0.0.1:8529/_system make integration
 ```
 
+For a local server with fictional data, use [the Docker demo](demo/README.md).
+It also includes a reproducible recorder for the README GIF. Demo recording
+dependencies are separate from plugin and test dependencies.
+
 ## Pull requests
 
 - Keep changes focused and explain the user-visible behavior.

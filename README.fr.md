@@ -7,22 +7,20 @@ Parcourez, modifiez et administrez vos données ArangoDB sans quitter Neovim.
 
 [English](README.md) | Français | [`:help arangodb.nvim`](doc/arangodb.nvim.txt)
 
+![Navigation dans les utilisateurs, édition et sauvegarde JSON, puis requête AQL et résultats tabulaires](doc/assets/demo.gif)
+
+Enregistré avec un conteneur ArangoDB local et des données fictives. [Reproduire la démo](demo/README.md).
+
+[Installation](#installation-avec-lazynvim) · [Démarrage rapide](#démarrage-rapide) · [Configuration](#configuration) · [Connexions](#connexions-et-identifiants) · [Utilisation](#utilisation) · [Exemple AQL](#exemple-aql) · [Dépannage](#dépannage) · [Contribution](#contribution)
+
 ## Fonctionnalités
 
-- Navigation dans les bases, collections et documents avec `snacks.nvim`.
-- Recherche sur les champs échantillonnés avec pages AQL asynchrones basées sur des curseurs.
-- Écriture, validation, explication, exécution et profilage AQL dans des buffers dédiés.
-- Édition avec `:write` et résolution des conflits concurrents sur `_rev`.
-- Création et duplication de documents sous forme de brouillons avant insertion.
-- Création, duplication, renommage et troncature asynchrones des collections de documents ou d’arêtes.
-- Édition des schémas/propriétés et gestion des index de collection.
-- Duplication fidèle des propriétés prises en charge, schémas, valeurs calculées et index secondaires.
-- Navigation vers les clés étrangères, relations imbriquées et références inverses détectées.
-- Requêtes AQL nommées, fichiers `.aql` réels, résultats tabulaires et exports JSON/CSV/Markdown.
-- Exploration bornée des graphes nommés depuis une commande ou un document.
-- Résolution différée des mots de passe par callback, variable d’environnement ou commande.
-- Connexions HTTP avec le transport Lua intégré, ou HTTPS avec `curl`.
-- Diagnostic avec `:checkhealth arangodb`.
+- Navigation et recherche dans les bases, collections et documents avec `snacks.nvim`.
+- Édition JSON avec `:write`, gestion des conflits de révision et création de brouillons.
+- Administration des collections, schémas, propriétés et index.
+- Écriture, validation, explication, profilage et sauvegarde AQL ; export des résultats.
+- Navigation entre documents liés et exploration des graphes nommés.
+- Connexions HTTP ou HTTPS, avec résolution différée des mots de passe.
 
 ## Prérequis
 
@@ -48,77 +46,42 @@ Parcourez, modifiez et administrez vos données ArangoDB sans quitter Neovim.
 }
 ```
 
+## Démarrage rapide
+
+Après installation, une connexion suffit ; la configuration détaillée ci-dessous est facultative.
+
+1. Configurez `connections` et `default_database` comme dans l’exemple d’installation, avec votre serveur et une base existante. `local_db` est un alias de connexion ; `ma_base` dans l’URL est le nom réel de la base.
+2. Lancez `:checkhealth arangodb` pour vérifier les dépendances locales et les connexions détectées. Ce contrôle ne teste pas l’authentification ni les droits de lecture sur le serveur.
+3. Lancez `:ArangoBrowse local_db`, sélectionnez une collection avec `<Entrée>`, puis ouvrez un document avec `<Entrée>`.
+4. Modifiez le JSON et lancez `:write` pour sauvegarder dans ArangoDB. Dans un picker, `<C-x>` donne accès aux actions, notamment la création d’un brouillon et la gestion des index.
+5. Utilisez `:ArangoResume` pour reprendre la navigation ou `:ArangoAql local_db` pour ouvrir un éditeur de requêtes.
+
+Pour essayer avec une base jetable déjà remplie, suivez [la démo Docker](demo/README.md) et utilisez l’alias `demo`.
+
 ## Configuration
+
+Appelez `setup()` même avec des connexions fournies par l’environnement. Ne renseignez que les options à personnaliser. `false` désactive un raccourci ; les raccourcis globaux, ceux d’écriture des pickers et l’auto-découverte sont désactivés par défaut.
+
+<details>
+<summary>Exemple de personnalisation</summary>
 
 ```lua
 require("arangodb").setup({
-  connections = {
-    travail = "https://utilisateur:secret@db.example.com:8529/travail",
-  },
-  default_database = "travail",
-  auto_discover = false,
-  keymaps = {
-    browse = "<leader>ab",
-    resume = "<leader>ar",
-    back = "<leader>aB",
-  },
-  document_keymaps = {
-    save = nil,
-    delete = nil,
-    duplicate = nil,
-    related = nil,
-    graph = nil,
-  },
-  aql_keymaps = {
-    execute = "<leader>ar",
-    validate = "<leader>av",
-    explain = "<leader>ae",
-    profile = "<leader>ap",
-    bind_vars = "<leader>ab",
-    history = "<leader>ah",
-    library = "<leader>al",
-    save = "<leader>as",
-    cancel = "<leader>ac",
-    result_format = nil,
-    export = nil,
-    next_page = "<C-n>",
-    prev_page = "<C-p>",
-  },
-  aql = {
-    batch_size = 100,
-    cursor_ttl = 300,
-    max_runtime = nil,
-    result_split = "auto",
-    result_format = "json",
-    history = {
-      enabled = true,
-      max_entries = 100,
-      path = nil,
-      store_bind_vars = true,
-    },
-    library = { path = nil },
-  },
-  graph = { depth = 2, max_nodes = 100, direction = "ANY" },
-  layout = { preset = "auto", preview = true },
   page_size = 50,
-  field_sample_size = 200,
-  cache_ttl = 5000,
-  http_timeout = 30000,
-  tls_verify = true,
-  tls_ca_file = nil,
-  diagnostics = {
-    enabled = false,
-    path = nil,
-    max_size = 1048576,
+  http_timeout = 30000, -- millisecondes
+  keymaps = {
+    browse = "<leader>aB",
+    resume = "<leader>aR",
+    back = "<leader>aP",
   },
 })
 ```
 
-Toutes les options et leurs valeurs par défaut figurent dans le [README anglais](README.md#configuration) et dans `:help arangodb.nvim`. Une touche peut être désactivée avec `false`. Les raccourcis globaux et les raccourcis d’écriture des pickers sont désactivés par défaut afin de respecter la configuration de chacun et de ne pas associer une mutation à une touche de saisie.
+Les majuscules distinguent ces raccourcis globaux des raccourcis locaux AQL. `page_size` contrôle les pages du navigateur, `aql.batch_size` celles de l’éditeur AQL et `aql_batch_size` les lots des autres opérations du client.
 
-`auto_discover` est volontairement désactivé par défaut. Lorsqu’il est activé, le plugin interroge `/_api/database/user` avec les variables `NVIM_ARANGO_HOST`, port, schéma et identifiants. Aucun accès réseau implicite n’a donc lieu pendant la complétion des commandes ou le healthcheck.
+</details>
 
-Les métadonnées, champs échantillonnés et métriques utilisent un cache court contrôlé par `cache_ttl` (`0` le désactive). Les aperçus de collection chargent en arrière-plan les métriques de chaque collection ainsi que les totaux de documents et de taille approximative de la base. Le journal de diagnostic facultatif écrit des événements JSONL nettoyés, sans identifiants, headers ou corps de requête. Son chemin par défaut est `stdpath("log") .. "/arangodb.nvim.log"`.
+Les [valeurs par défaut complètes](README.md#configuration) et [`:help arangodb.nvim-options`](doc/arangodb.nvim.txt) détaillent les options, leurs unités, le cache et les diagnostics.
 
 ## Connexions et identifiants
 
@@ -128,23 +91,7 @@ Format accepté :
 http[s]://[utilisateur:mot_de_passe@]hôte[:port]/base
 ```
 
-L’authentification est facultative. Les identifiants percent-encodés et IPv6 sont pris en charge :
-
-```lua
-connections = {
-  sans_auth = "http://127.0.0.1:8529/exemple",
-  encoded = "https://user%40example.com:p%40ssword@db.example.com:8529/exemple",
-  ipv6 = "http://[::1]:8529/exemple",
-}
-```
-
-Évitez de versionner vos secrets. Les variables `NVIM_ARANGO_<NOM>_URL` sont détectées automatiquement :
-
-```bash
-export NVIM_ARANGO_TRAVAIL_URL='https://lecteur:secret@db.example.com:8529/travail'
-```
-
-Un profil structuré garde le mot de passe hors de l’URL et ne le résout qu’à l’ouverture de la connexion. `password` accepte aussi une fonction ; `password_command` accepte une liste d’arguments (recommandée) ou une commande shell, avec un délai maximal de 10 secondes par défaut (`password_command_timeout`) :
+Utilisez un profil structuré pour garder le mot de passe hors de la configuration :
 
 ```lua
 connections = {
@@ -153,81 +100,31 @@ connections = {
     username = "lecteur",
     password_env = "ARANGODB_TRAVAIL_PASSWORD",
   },
-  coffre = {
-    url = "https://db.example.com:8529/coffre",
-    username = "lecteur",
-    password_command = { "security", "find-generic-password", "-w", "-s", "arangodb-coffre" },
-  },
-  dynamique = {
-    url = "http://127.0.0.1:8529/exemple",
-    password = function(contexte)
-      return charger_secret(contexte.name)
-    end,
-  },
 }
 ```
 
-Le secret résolu n’est jamais ajouté à la complétion ni au healthcheck. Une commande doit écrire uniquement le mot de passe sur sa sortie standard.
+Exportez `ARANGODB_TRAVAIL_PASSWORD` avant de lancer Neovim. Autre possibilité : `NVIM_ARANGO_<NOM>_URL` fournit une URL complète ; la connexion porte alors le nom de la base dans l’URL.
 
-Variables disponibles pour l’auto-découverte :
+Les sources sont lues dans cet ordre : `setup().connections`, `vim.g.arangodb_connections`, puis les URL d’environnement. La première source est prioritaire pour un nom donné. L’authentification est facultative ; les identifiants percent-encodés et les hôtes IPv6 entre crochets sont pris en charge.
 
-- `NVIM_ARANGO_HOST` (défaut `127.0.0.1`)
-- `NVIM_ARANGO_PORT` (défaut `8529`)
-- `NVIM_ARANGO_SCHEME` (`http`, `https`, `ssl` ou `tls`)
-- `NVIM_ARANGO_USER` (défaut `root`)
-- `NVIM_ARANGO_PASSWORD` (défaut `root`)
-- `NVIM_ARANGO_SYSTEM_URL`
-
-Pour une autorité de certification privée, utilisez `tls_ca_file`. Désactiver `tls_verify` est possible mais déconseillé.
+Pour les callbacks, commandes de mot de passe et variables de découverte, consultez [`:help arangodb.nvim-connections`](doc/arangodb.nvim.txt). Utilisez `tls_ca_file` pour une autorité privée et conservez `tls_verify = true`.
 
 ## Utilisation
 
-```vim
-:ArangoBrowse
-:ArangoBrowse ma_base
-:ArangoResume
-:ArangoBack
-:ArangoAql
-:ArangoAql ma_base
-:ArangoAqlAttach ma_base
-:ArangoAqlLibrary ma_base
-:ArangoGraph ma_base
-```
+| Commande | Action |
+| --- | --- |
+| `:ArangoBrowse [base]` | Ouvrir une connexion avec son alias configuré |
+| `:ArangoResume` / `:ArangoBack` | Reprendre la navigation / revenir en arrière |
+| `:ArangoAql [base]` | Ouvrir un éditeur AQL |
+| `:ArangoAqlAttach [base]` | Ajouter les outils AQL à un fichier `.aql` existant |
+| `:ArangoAqlLibrary [base]` | Parcourir les requêtes sauvegardées |
+| `:ArangoGraph [base]` | Explorer un graphe nommé |
 
-Dans un buffer de document :
+Dans un document, `:write` sauvegarde dans ArangoDB. `:ArangoDocumentDuplicate`, `:ArangoDocumentDelete`, `:ArangoDocumentRelated` et `:ArangoDocumentGraph` donnent accès aux actions du document. En cas de conflit de révision, la sauvegarde propose de recharger, comparer ou forcer explicitement l’écrasement.
 
-```vim
-:write
-:ArangoDocumentSave
-:ArangoDocumentDuplicate
-:ArangoDocumentDelete
-:ArangoDocumentRelated
-:ArangoDocumentGraph
-```
+Une requête AQL s’ouvre avec un buffer JSON pour ses variables. Les commandes et raccourcis normaux fonctionnent dans les deux buffers ; les sélections visuelles concernent uniquement la requête. L’exécution et le profilage demandent confirmation avant une mutation ; la validation et l’explication n’exécutent rien.
 
-Dans un éditeur ouvert par `:ArangoAql` :
-
-```vim
-:ArangoAqlExecute
-:ArangoAqlValidate
-:ArangoAqlExplain
-:ArangoAqlProfile
-:ArangoAqlBindVars
-:ArangoAqlHistory
-:ArangoAqlLibrary
-:ArangoAqlSave
-:ArangoAqlCancel
-```
-
-Les buffers de résultat proposent `:ArangoAqlResultFormat [json|table]` et `:ArangoAqlExport [chemin]` ; l’extension `.json`, `.csv`, `.md` ou `.markdown` choisit le format. L’écriture est atomique, les dossiers parents sont créés si nécessaire et le remplacement d’un fichier existant exige une confirmation explicite. Depuis un vrai fichier `.aql`, `:ArangoAqlAttach [base]` ajoute les mêmes commandes sans transformer le buffer en scratch.
-
-La requête utilise le filetype `aql`. Le buffer JSON non listé associé aux bind variables s’ouvre automatiquement en dessous tandis que le focus reste sur la requête ; sélectionner un autre buffer de requête AQL dans la barre de buffers remplace automatiquement le split associé par les variables de cette session. Les commandes AQL ci-dessus et leurs raccourcis en mode normal sont disponibles depuis les deux buffers et ciblent toujours la requête associée ; les raccourcis sur sélection visuelle restent limités au buffer AQL. Une variable de collection `@@collection` utilise par exemple la clé `"@collection"`. Si l’onglet courant contient déjà une session AQL, `:ArangoAql` ouvre la suivante dans un nouvel onglet plutôt que d’empiler ses splits. Les résultats restent associés à leur session et apparaissent dans un split JSON en lecture seule, à droite sur écran large et en dessous sur écran étroit. Les pages déjà visitées restent en cache local.
-
-L’exécution et le profilage demandent d’abord le plan optimisé à ArangoDB. Une requête dont `plan.isModificationQuery = true` exige une confirmation explicite affichant la base et les collections modifiées. Explain et validation n’exécutent jamais la requête.
-
-L’historique est recherchable avec `snacks.nvim` et stocké par défaut dans `stdpath("data") .. "/arangodb.nvim/aql_history.json"` avec des permissions réservées à l’utilisateur. Il ne contient jamais URL, identifiants, résultats ou erreurs. Les requêtes et bind variables peuvent néanmoins être sensibles ; utilisez `aql.history.enabled = false` ou `store_bind_vars = false` si nécessaire. Après la désactivation de `store_bind_vars`, la prochaine écriture de l’historique supprime aussi les bind variables des entrées conservées.
-
-Les requêtes nommées sont stockées séparément dans `stdpath("data") .. "/arangodb.nvim/aql_library.json"`, par connexion et base, avec des permissions utilisateur. Elles enregistrent les bind variables courantes, qui peuvent contenir des valeurs sensibles. `:ArangoAqlSave` crée ou remplace un nom ; `:ArangoAqlLibrary` charge ou supprime une entrée sans l’exécuter.
+L’historique et les requêtes nommées sont conservés localement, avec leurs variables. Pour des requêtes sensibles, désactivez `aql.history.enabled` ou `aql.history.store_bind_vars` et évitez d’enregistrer des valeurs sensibles dans la bibliothèque. [`:help arangodb.nvim-aql`](doc/arangodb.nvim.txt) détaille le stockage, les sessions et les commandes.
 
 Raccourcis par défaut dans les buffers AQL :
 
@@ -244,13 +141,7 @@ Raccourcis par défaut dans les buffers AQL :
 | `<leader>ac` | Annuler et fermer le curseur actif |
 | `<C-p>` / `<C-n>` | Page de résultat précédente / suivante |
 
-Touches par défaut du picker de collections :
-
-| Touche | Action |
-| --- | --- |
-| `<Entrée>` | Ouvrir la collection |
-| `<C-x>` | Ouvrir le menu d’actions |
-| `<C-b>` | Revenir au choix de la base lorsque disponible |
+Dans les pickers, `<Entrée>` ouvre la sélection, `<C-x>` ses actions et `<C-b>` revient en arrière lorsque possible.
 
 Touches par défaut du picker de documents :
 
@@ -264,45 +155,73 @@ Touches par défaut du picker de documents :
 | `<C-x>` | Ouvrir le menu d’actions |
 | `<C-b>` | Revenir en arrière |
 
-La navigation et le menu d’actions sont disponibles en modes normal et insertion. Les raccourcis d’écriture des pickers sont désactivés par défaut ; création, duplication, renommage, suppression et troncature restent disponibles via `<C-x>`. Lorsqu’ils sont configurés explicitement, les raccourcis d’écriture restent limités au mode normal. Les opérations destructives demandent une confirmation qui affiche la base et la ressource ciblées ; la troncature comporte un avertissement d’irréversibilité. Le renommage, la troncature ou une suppression depuis un buffer concerné sont refusés si un buffer ArangoDB correspondant contient des changements non sauvegardés.
+La navigation fonctionne en modes normal et insertion. `<C-x>` donne accès à la création, la duplication, aux schémas, aux index et aux actions destructives. Les raccourcis d’écriture configurés explicitement restent limités au mode normal. Les opérations destructives demandent confirmation et des garde-fous protègent les buffers modifiés.
 
-Les menus d’actions d’une collection ou de ses documents permettent aussi de gérer les index. Le sélecteur d’index utilise le raccourci d’actions configuré (`<C-x>` par défaut) pour créer, inspecter en JSON ou supprimer un index. `<Esc>` revient du menu d’actions au sélecteur d’index, puis du sélecteur d’index au picker de collections ou de documents précédent. Le menu de collection permet en plus d’éditer en JSON ses propriétés mutables, notamment le schéma de validation. La duplication crée les propriétés et index non système pris en charge avant de copier les documents ; un échec ou une annulation après la création de la cible supprime la collection partielle. Un échec de ce nettoyage est signalé explicitement.
+ArangoDB applique les permissions : accès en lecture pour les consultations, en écriture pour les mutations et privilèges correspondants pour administrer collections et index. [`:help arangodb.nvim-development`](doc/arangodb.nvim.txt) détaille les permissions et les limites de duplication.
 
-### Permissions ArangoDB nécessaires
+## Exemple AQL
 
-N’accordez que les droits requis par les parcours utilisés. La navigation, les lectures AQL et les traversées de graphes exigent un accès en lecture à la base et à chaque collection consultée. Les écritures de documents et mutations AQL exigent un accès en écriture aux collections concernées. La création, le renommage, la troncature ou la duplication de collections ainsi que la modification des propriétés, schémas et index nécessitent les privilèges d’administration de base/collection adaptés au déploiement. Le plugin ne contourne jamais l’autorisation ArangoDB ; les rôles exacts peuvent varier entre serveur unique, cluster et service managé.
+Avec [la base de démonstration](demo/README.md), ouvrez `:ArangoAql demo` et saisissez :
 
-La révision `_rev` protège les sauvegardes concurrentes. En cas de conflit, le plugin permet de recharger la version distante, de comparer les deux versions ou de forcer explicitement l’écrasement. Les lectures des pickers sont asynchrones et annulables ; la pagination utilise les curseurs ArangoDB.
+```aql
+FOR user IN @@collection
+  FILTER user.active == @active
+  SORT user.name
+  RETURN { name: user.name, role: user.role }
+```
 
-Les buffers de documents et de métadonnées sont isolés par connexion configurée, même lorsque les bases et les identifiants de documents sont identiques. Réouvrir un éditeur conserve les modifications non sauvegardées. Les changements saisis pendant une sauvegarde restent dans le buffer et nécessitent un nouveau `:write` ; le plugin conserve la nouvelle révision serveur pour cette prochaine sauvegarde du document.
+Dans le buffer JSON associé (`:ArangoAqlBindVars`), saisissez :
+
+```json
+{
+  "@collection": "users",
+  "active": true
+}
+```
+
+Lancez `:write` dans ce buffer pour valider le JSON, puis `:ArangoAqlExecute`. La variable de collection `@@collection` correspond à la clé JSON `"@collection"` ; la variable de valeur `@active` correspond à `"active"`.
+
+Après initialisation des données, le tableau `result` contient :
+
+```json
+[
+  { "name": "Alice Martin", "role": "Engineer" },
+  { "name": "Ben Taylor", "role": "Designer" },
+  { "name": "Chloe Dubois", "role": "Engineer" }
+]
+```
+
+Le GIF remplace d’abord le rôle d’Alice par `Maintainer` : la requête affiche donc cette valeur sauvegardée. Dans le buffer de résultat, utilisez `:ArangoAqlResultFormat table` pour une vue compacte ou `:ArangoAqlExport /tmp/active-users.csv` pour exporter **la page courante**. L’export ne récupère pas les pages restantes du curseur.
 
 ## Explorateur de graphes
 
-`:ArangoGraph [base]` liste les graphes nommés, demande un document de départ comme `users/alice`, puis affiche un voisinage borné en largeur. Depuis un document, utilisez `:ArangoDocumentGraph` ou le menu d’actions. Dans le buffer, `<CR>` ouvre le document du sommet, `s` repart du sommet sélectionné, `r` rafraîchit, `d` change la profondeur et `t` alterne `ANY`, `OUTBOUND` et `INBOUND`. Ces touches sont configurables ou désactivables avec `graph_keymaps`. La profondeur est plafonnée à 10 et `graph.max_nodes` borne le résultat.
+Lancez `:ArangoGraph [base]` et choisissez un graphe et un document de départ, ou utilisez `:ArangoDocumentGraph` depuis un document. L’exploration est bornée en profondeur et en nombre de sommets. Voir [`:help arangodb.nvim-graph`](doc/arangodb.nvim.txt) pour les touches et limites.
+
+## Dépannage
+
+| Symptôme | Vérification |
+| --- | --- |
+| Aucune connexion proposée | Appelez `setup()`, vérifiez `connections` ou exportez `NVIM_ARANGO_<NOM>_URL` avant de lancer Neovim. L’auto-découverte est désactivée par défaut. |
+| Mauvaise base ou mauvais serveur | Utilisez l’alias configuré, par exemple `:ArangoBrowse local_db`. Un nom inconnu construit une URL avec les paramètres `NVIM_ARANGO_HOST`. Les connexions d’environnement portent le nom de la base dans l’URL, pas celui de la variable. |
+| Connexion refusée ou délai dépassé | Vérifiez l’hôte, le port, le serveur/conteneur et l’accès réseau. La démo utilise le port `18529`. |
+| Erreur d’authentification ou de droits | Vérifiez `username`, le fournisseur de mot de passe et les droits sur la base et les collections. Le healthcheck ne teste pas les autorisations serveur. |
+| Erreur de certificat HTTPS | Installez `curl` et configurez `tls_ca_file` pour une autorité privée, en conservant la vérification TLS. |
+| Le picker ne s’ouvre pas | Lancez `:checkhealth arangodb`, vérifiez que Snacks est chargé et que son `picker` est activé. |
+| Champ ou relation absent | La découverte est échantillonnée et heuristique ; vérifiez `field_sample_size` et `max_field_depth`, ou utilisez une requête AQL explicite. |
+
+Pour signaler un bug, joignez `:messages` et les versions demandées dans [CONTRIBUTING.md](CONTRIBUTING.md). Relisez le journal `diagnostics` avant partage : il exclut les identifiants et les corps de requête, mais contient les noms d’hôtes et les chemins HTTP.
 
 ## Limites
 
-- Les opérations distantes des pickers, documents, collections, métadonnées et graphes sont asynchrones et annulables. Une commande locale de mot de passe est résolue à l’ouverture et peut brièvement bloquer Neovim.
-- L’annulation AQL interrompt la requête locale et ferme les curseurs connus. Sans `aql.max_runtime`, une requête déjà lancée côté serveur peut continuer selon sa configuration.
-- HTTPS nécessite actuellement `curl`.
-- La détection des relations est heuristique.
-- L’explorateur de graphes affiche un voisinage textuel borné, pas un canevas orienté par forces.
+- L’annulation AQL ferme les curseurs connus, mais une requête serveur en cours peut continuer ; utilisez `aql.max_runtime` pour borner son exécution.
+- Les relations sont détectées par échantillonnage et heuristiques ; les graphes sont affichés sous forme de voisinages textuels bornés.
+- Une commande externe de mot de passe peut brièvement bloquer Neovim.
 
 ## Contribution
 
-```bash
-make test
-make lint
-make docs
-```
+`make lint` vérifie le formatage et lance les tests Neovim ; `make docs` régénère les tags de l’aide. Les tests d’intégration nécessitent une base ArangoDB jetable.
 
-Un test d’intégration facultatif nécessite une base jetable, car il effectue des opérations destructives sur les collections (avec tentative de nettoyage) :
-
-```bash
-ARANGODB_TEST_URL=http://127.0.0.1:8529/_system make integration
-```
-
-Les issues et pull requests sont les bienvenues. Indiquez vos versions de Neovim, `snacks.nvim` et ArangoDB, une configuration minimale sans secrets, ainsi que les étapes de reproduction. Consultez [CONTRIBUTING.md](CONTRIBUTING.md) pour le processus et [SECURITY.md](SECURITY.md) pour signaler une vulnérabilité en privé.
+Consultez [CONTRIBUTING.md](CONTRIBUTING.md) pour contribuer ou signaler un bug, [la démo Docker](demo/README.md) pour les données fictives et l’enregistrement du GIF, et [SECURITY.md](SECURITY.md) pour les vulnérabilités.
 
 ## Licence
 

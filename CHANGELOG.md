@@ -2,6 +2,26 @@
 
 All notable changes to arangodb.nvim are documented here.
 
+## [0.6.2] - 2026-09-07
+
+### Fixed
+
+- Preserve unsaved document and metadata edits when reopening buffers or completing asynchronous saves. Draft insertion also preserves newer edits, and subsequent document saves use the updated server revision.
+- Resolve conflicts using current buffer contents for forced overwrites, and skip remote reloads when new local edits arrive during the request.
+- Isolate document and metadata buffers across connections with identical database names and document IDs. Scope destructive-operation guards and buffer cleanup to the matching server and database.
+- Restore index-picker navigation: the configured action key opens index actions, and cancelling returns to the index selector or previous collection/document picker. Index management is also available from document pickers.
+
+### Tests
+
+- Add regression coverage for buffer isolation, edits during saves, draft insertion, and index navigation, including smoke coverage with real Snacks pickers.
+
+### Documentation
+
+- Add a reproducible Docker demo with fictional data and a recorded Neovim GIF.
+- Add quick-start guides, a complete AQL example, and troubleshooting in English and French.
+- Shorten the READMEs, fold detailed configuration, and keep advanced behavior in Vim help.
+- Clarify connection credentials, option units, and local checks; fix incomplete help text.
+
 ## [0.6.1] - 2026-08-05
 
 ### Fixed
@@ -37,5 +57,6 @@ All notable changes to arangodb.nvim are documented here.
 
 - Collection editor transitions close the active picker cleanly and no longer recreate an existing Snacks backdrop, preventing background flicker.
 
+[0.6.2]: https://github.com/LeuciRemi/arangodb.nvim/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/LeuciRemi/arangodb.nvim/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/LeuciRemi/arangodb.nvim/compare/v0.5.2...v0.6.0
