@@ -274,6 +274,8 @@ N’accordez que les droits requis par les parcours utilisés. La navigation, le
 
 La révision `_rev` protège les sauvegardes concurrentes. En cas de conflit, le plugin permet de recharger la version distante, de comparer les deux versions ou de forcer explicitement l’écrasement. Les lectures des pickers sont asynchrones et annulables ; la pagination utilise les curseurs ArangoDB.
 
+Les buffers de documents et de métadonnées sont isolés par connexion configurée, même lorsque les bases et les identifiants de documents sont identiques. Réouvrir un éditeur conserve les modifications non sauvegardées. Les changements saisis pendant une sauvegarde restent dans le buffer et nécessitent un nouveau `:write` ; le plugin conserve la nouvelle révision serveur pour cette prochaine sauvegarde du document.
+
 ## Explorateur de graphes
 
 `:ArangoGraph [base]` liste les graphes nommés, demande un document de départ comme `users/alice`, puis affiche un voisinage borné en largeur. Depuis un document, utilisez `:ArangoDocumentGraph` ou le menu d’actions. Dans le buffer, `<CR>` ouvre le document du sommet, `s` repart du sommet sélectionné, `r` rafraîchit, `d` change la profondeur et `t` alterne `ANY`, `OUTBOUND` et `INBOUND`. Ces touches sont configurables ou désactivables avec `graph_keymaps`. La profondeur est plafonnée à 10 et `graph.max_nodes` borne le résultat.

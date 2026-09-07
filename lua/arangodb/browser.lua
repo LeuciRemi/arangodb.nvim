@@ -403,6 +403,12 @@ local function arangodb_document_buffers(opts)
       or (opts.include_drafts ~= false and is_draft and vim.b[buf].arangodb_document_collection ~= nil)
     if vim.api.nvim_buf_is_valid(buf) and has_document then
       local matches = true
+      if
+        opts.config
+        and utils.connection_id(vim.b[buf].arangodb_config, true) ~= utils.connection_id(opts.config, true)
+      then
+        matches = false
+      end
       if opts.database and vim.b[buf].arangodb_database ~= opts.database then
         matches = false
       end
@@ -530,6 +536,7 @@ end
 local function rename_collection_with_prompt(config, collection, callback, picker)
   if
     not ensure_unmodified_document_buffers({
+      config = config,
       database = config.database,
       collection = collection,
     }, "renaming this collection")
@@ -570,6 +577,7 @@ end
 local function truncate_collection_with_prompt(config, collection, callback, picker)
   if
     not ensure_unmodified_document_buffers({
+      config = config,
       database = config.database,
       collection = collection,
     }, "truncating this collection")
@@ -583,6 +591,7 @@ local function truncate_collection_with_prompt(config, collection, callback, pic
       return client.truncate_collection_async(config, collection, done)
     end, function(result)
       close_document_buffers({
+        config = config,
         database = config.database,
         collection = collection,
         include_drafts = false,
@@ -600,6 +609,7 @@ end
 local function duplicate_collection_with_prompt(config, collection, callback, picker)
   if
     not ensure_unmodified_document_buffers({
+      config = config,
       database = config.database,
       collection = collection,
     }, "duplicating this collection")
@@ -672,8 +682,8 @@ local function open_related_selector(config, relations, on_choice)
   end)
 end
 
-local function document_buffer_name(doc)
-  return string.format("arangodb-buffer://%s/%s", doc.database, doc.id)
+local function document_buffer_name(config, doc)
+  return utils.connection_buffer_name(string.format("arangodb-buffer://%s/%s", doc.database, doc.id), config)
 end
 
 local function set_buffer_json(buf, text)
@@ -699,12 +709,18 @@ local function get_current_document_payload(buf)
   if not ok or type(decoded) ~= "table" then
     error("Current buffer does not contain valid JSON")
   end
+  local saved = vim.b[buf].arangodb_document
+  -- A completed save may advance the revision while newer buffer text is kept.
+  if vim.b[buf].arangodb_document_is_new ~= true and type(saved) == "table" then
+    decoded._rev = saved._rev
+  end
   return decoded
 end
 
 refresh_collection_document_buffers = function(config, old_collection, new_collection)
   for _, buf in
     ipairs(arangodb_document_buffers({
+      config = config,
       database = config.database,
       collection = old_collection,
     }))
@@ -1443,14 +1459,21 @@ local function document_actions(config, buf)
       return
     end
     local handle
+    vim.b[buf].arangodb_document_pending = true
     handle = start_async(title, starter, function(value)
       if active_request == handle then
         active_request = nil
       end
-      if vim.api.nvim_buf_is_valid(buf) and on_success then
-        on_success(value)
+      if vim.api.nvim_buf_is_valid(buf) then
+        vim.b[buf].arangodb_document_pending = nil
+        if on_success then
+          on_success(value)
+        end
       end
     end, function(err)
+      if vim.api.nvim_buf_is_valid(buf) then
+        vim.b[buf].arangodb_document_pending = nil
+      end
       if active_request == handle then
         active_request = nil
       end
@@ -1464,13 +1487,22 @@ local function document_actions(config, buf)
     return handle
   end
 
-  local function apply_saved_result(result, is_new)
-    M.open_document(config, vim.tbl_extend("force", result, { database = config.database, buf = buf }))
+  local function apply_saved_result(result, is_new, changedtick)
+    M.open_document(
+      config,
+      vim.tbl_extend("force", result, {
+        database = config.database,
+        buf = buf,
+        write_tick = changedtick,
+        show = false,
+      })
+    )
     refresh_picker()
     vim.notify(is_new and "Document created" or "Document saved", vim.log.levels.INFO)
   end
 
   local function save_existing_document(payload, force)
+    local changedtick = vim.api.nvim_buf_get_changedtick(buf)
     buffer_request("ArangoDB Save", function(done)
       return client.save_document_async(
         config,
@@ -1480,7 +1512,7 @@ local function document_actions(config, buf)
         done
       )
     end, function(result)
-      apply_saved_result(result, false)
+      apply_saved_result(result, false, changedtick)
     end, function(result)
       if not errors.is(result, "conflict") then
         arango.notify_error(result, "ArangoDB Save")
@@ -1496,14 +1528,32 @@ local function document_actions(config, buf)
             return
           end
           if choice == "Force overwrite" then
-            save_existing_document(payload, true)
+            local ok, current = pcall(get_current_document_payload, buf)
+            if ok then
+              save_existing_document(current, true)
+            else
+              arango.notify_error(current, "ArangoDB Save")
+            end
             return
           end
+          local reload_tick = vim.api.nvim_buf_get_changedtick(buf)
           buffer_request("ArangoDB Conflict", function(done)
             return client.get_document_async(config, vim.b[buf].arangodb_document_id, done)
           end, function(remote)
             if choice == "Reload remote version" then
-              M.open_document(config, vim.tbl_extend("force", remote, { database = config.database, buf = buf }))
+              if vim.api.nvim_buf_get_changedtick(buf) ~= reload_tick then
+                vim.notify("Local changes preserved; remote reload skipped", vim.log.levels.INFO)
+                return
+              end
+              M.open_document(
+                config,
+                vim.tbl_extend("force", remote, {
+                  database = config.database,
+                  buf = buf,
+                  write_tick = reload_tick,
+                  show = false,
+                })
+              )
               vim.notify("Remote document reloaded", vim.log.levels.INFO)
             else
               open_conflict_diff(buf, payload, remote.document or remote)
@@ -1522,12 +1572,13 @@ local function document_actions(config, buf)
     end
 
     local is_new = vim.b[buf].arangodb_document_is_new == true
+    local changedtick = vim.api.nvim_buf_get_changedtick(buf)
     local action = is_new and "ArangoDB Create" or "ArangoDB Save"
     if is_new then
       buffer_request(action, function(done)
         return client.create_document_async(config, vim.b[buf].arangodb_document_collection, payload, done)
       end, function(result)
-        apply_saved_result(result, true)
+        apply_saved_result(result, true, changedtick)
       end)
     else
       save_existing_document(payload, false)
@@ -1603,6 +1654,7 @@ local function document_actions(config, buf)
 
     if
       not ensure_unmodified_document_buffers({
+        config = config,
         database = config.database,
         id = document_id,
         include_drafts = false,
@@ -1618,7 +1670,7 @@ local function document_actions(config, buf)
     buffer_request("ArangoDB Delete", function(done)
       return client.delete_document_async(config, document_id, done)
     end, function()
-      close_document_buffers({ database = config.database, id = document_id, include_drafts = false })
+      close_document_buffers({ config = config, database = config.database, id = document_id, include_drafts = false })
       refresh_picker()
       vim.notify("Document deleted", vim.log.levels.INFO)
     end)
@@ -1706,10 +1758,14 @@ function M.open_document(config, doc)
 
   local buf
   local target = doc.buf
-  if target and vim.api.nvim_buf_is_valid(target) then
+  if
+    target
+    and vim.api.nvim_buf_is_valid(target)
+    and vim.b[target].arangodb_connection_id == utils.connection_id(config)
+  then
     buf = target
   else
-    buf = vim.fn.bufadd(document_buffer_name({
+    buf = vim.fn.bufadd(document_buffer_name(config, {
       database = database,
       id = display_id,
     }))
@@ -1721,16 +1777,27 @@ function M.open_document(config, doc)
   end
   preview = preview or "{}"
 
+  vim.bo[buf].swapfile = false
   vim.fn.bufload(buf)
+  if (vim.bo[buf].modified or vim.b[buf].arangodb_document_pending) and doc.write_tick == nil then
+    if doc.show ~= false then
+      vim.cmd("buffer " .. buf)
+    end
+    return
+  end
+  local preserve_changes = doc.write_tick ~= nil and vim.api.nvim_buf_get_changedtick(buf) ~= doc.write_tick
+  vim.b[buf].arangodb_connection_id = utils.connection_id(config)
   pcall(
     vim.api.nvim_buf_set_name,
     buf,
-    document_buffer_name({
+    document_buffer_name(config, {
       database = database,
       id = display_id,
     })
   )
-  set_buffer_json(buf, preview)
+  if not preserve_changes then
+    set_buffer_json(buf, preview)
+  end
 
   vim.bo[buf].filetype = "json"
   vim.bo[buf].buftype = "acwrite"
@@ -1738,7 +1805,7 @@ function M.open_document(config, doc)
   vim.bo[buf].bufhidden = "hide"
   vim.bo[buf].swapfile = false
   vim.bo[buf].modifiable = true
-  vim.bo[buf].modified = false
+  vim.bo[buf].modified = preserve_changes
 
   vim.b[buf].arangodb_config = config
   vim.b[buf].arangodb_document = doc.document
@@ -2628,6 +2695,7 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
         local document_id = selected.item.id
         if
           not ensure_unmodified_document_buffers({
+            config = config,
             database = config.database,
             id = document_id,
             include_drafts = false,
@@ -2643,7 +2711,12 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
         picker_request(current, "ArangoDB Delete", function(done)
           return client.delete_document_async(config, document_id, done)
         end, function()
-          close_document_buffers({ database = config.database, id = document_id, include_drafts = false })
+          close_document_buffers({
+            config = config,
+            database = config.database,
+            id = document_id,
+            include_drafts = false,
+          })
           local target_page = meta.page_index > 1 and #meta.items == 1 and (meta.page_index - 1) or meta.page_index
           invalidate_pages(target_page)
           current:find({ refresh = true })

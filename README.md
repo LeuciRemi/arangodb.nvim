@@ -334,6 +334,8 @@ Grant only the access needed by the enabled workflows. Browsing, AQL reads, and 
 
 Document saves use `_rev` as an optimistic concurrency guard. When the remote document changed, the plugin offers to reload it, compare local and remote JSON, or explicitly force the overwrite. Picker reads are asynchronous and cancellable; document pages use ArangoDB cursors and previously visited pages remain available locally.
 
+Document and metadata buffers are isolated by the configured connection, even when databases and document IDs match. Reopening an editor preserves unsaved changes. Edits made while a save is running remain in the buffer and require another `:write`; document saves retain the updated server revision for that next write.
+
 ## Graph explorer
 
 `:ArangoGraph [database]` lists named graphs, asks for a start document ID such as `users/alice`, and opens a bounded breadth-first neighborhood. From an existing document use `:ArangoDocumentGraph` or the picker actions menu. In the graph buffer, `<CR>` opens a vertex document, `s` traverses from the selected vertex, `r` refreshes, `d` changes depth, and `t` cycles `ANY`, `OUTBOUND`, and `INBOUND`. These mappings are configurable or may be disabled through `graph_keymaps`. Depth is capped at 10 and `graph.max_nodes` bounds each result.

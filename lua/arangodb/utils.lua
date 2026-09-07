@@ -1,6 +1,31 @@
 --- Shared utility functions used across ArangoDB modules.
 local M = {}
 
+--- Identify a resolved connection without exposing credentials in buffer names.
+function M.connection_id(config, resource_only)
+  config = config or {}
+  local fields = { config.scheme or "http", config.host or "", tostring(config.port or 8529), config.database or "" }
+  if not resource_only then
+    fields[#fields + 1] = config.user or vim.NIL
+    fields[#fields + 1] = config.password or vim.NIL
+  end
+  return vim.fn.sha256(vim.json.encode(fields))
+end
+
+--- Keep existing buffer names when possible, isolating connections on collision.
+function M.connection_buffer_name(name, config)
+  local identity = M.connection_id(config)
+  local scoped = name .. "?connection=" .. identity
+  if vim.fn.bufnr(scoped) ~= -1 then
+    return scoped
+  end
+  local buf = vim.fn.bufnr(name)
+  if buf == -1 or vim.b[buf].arangodb_connection_id == identity then
+    return name
+  end
+  return scoped
+end
+
 --- Check whether a Lua table is a list (sequential integer keys starting at 1).
 function M.is_list(value)
   if vim.islist then
