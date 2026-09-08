@@ -24,19 +24,20 @@ return {
   h.test("index deletion requires a database-qualified confirmation", function()
     local original_select = vim.ui.select
     local original_confirm = vim.fn.confirm
-    local select_call = 0
+    local select_index
+    local index_picker_count = 0
     local confirms = { 2, 1 }
     local confirm_messages = {}
     local deletes = 0
     vim.ui.select = function(items, opts, done)
-      select_call = select_call + 1
       h.eq(true, type(opts.snacks) == "table")
-      if select_call == 1 or select_call == 3 then
-        done(items[2])
-      elseif select_call == 2 or select_call == 4 then
-        done("Delete index")
+      if opts.prompt == "Indexes (test/items)" then
+        index_picker_count = index_picker_count + 1
+        select_index = function()
+          done(items[2])
+        end
       else
-        done(nil)
+        done("Delete index")
       end
     end
     vim.fn.confirm = function(message)
@@ -55,9 +56,12 @@ return {
         end,
       }, { open = function() end }, function(admin)
         admin.manage_indexes(config, "items")
+        select_index()
         h.eq(0, deletes)
-        admin.manage_indexes(config, "items")
+        h.eq(2, index_picker_count)
+        select_index()
         h.eq(1, deletes)
+        h.eq(3, index_picker_count)
       end)
     end, debug.traceback)
     vim.ui.select = original_select
