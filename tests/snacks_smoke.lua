@@ -397,3 +397,5 @@ assert(
 )
 require("snacks.picker.core.picker").get()[1]:close()
 vim.api.nvim_buf_delete(session.query_buf, { force = true })
+
+dofile("tests/snacks_index_smoke.lua")

@@ -100,6 +100,7 @@ end
 local function delete_index(config, collection, index, on_change, on_back)
   if index.type == "primary" or index.type == "edge" then
     vim.notify("ArangoDB system indexes cannot be deleted", vim.log.levels.WARN)
+    M.manage_indexes(config, collection, on_change, on_back)
     return
   end
   if
@@ -109,6 +110,7 @@ local function delete_index(config, collection, index, on_change, on_back)
       2
     ) ~= 1
   then
+    M.manage_indexes(config, collection, on_change, on_back)
     return
   end
   request("ArangoDB Delete Index", function(done)
@@ -122,6 +124,16 @@ local function delete_index(config, collection, index, on_change, on_back)
   end)
 end
 
+local function inspect_index_json(config, collection, index)
+  editor.open({
+    config = config,
+    name = string.format("arangodb-index://%s/%s/%s", config.database, collection, index.id or index.name),
+    title = "ArangoDB Index",
+    value = index,
+    readonly = true,
+  })
+end
+
 local function inspect_index(config, collection, index, on_change, on_back)
   vim.ui.select(
     { "Inspect JSON", "Delete index" },
@@ -130,13 +142,7 @@ local function inspect_index(config, collection, index, on_change, on_back)
     }),
     function(action)
       if action == "Inspect JSON" then
-        editor.open({
-          config = config,
-          name = string.format("arangodb-index://%s/%s/%s", config.database, collection, index.id or index.name),
-          title = "ArangoDB Index",
-          value = index,
-          readonly = true,
-        })
+        inspect_index_json(config, collection, index)
         return
       end
       if action == "Delete index" then
@@ -188,7 +194,7 @@ function M.manage_indexes(config, collection, on_change, on_back)
               if choice.action == "create" then
                 create_index(config, collection, on_change)
               elseif choice.action == "inspect" and index then
-                inspect_index(config, collection, index, on_change, on_back)
+                inspect_index_json(config, collection, index)
               elseif choice.action == "delete" and index then
                 delete_index(config, collection, index, on_change, on_back)
               end
