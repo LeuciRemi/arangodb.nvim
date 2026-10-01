@@ -188,16 +188,10 @@ local function run_aql(config, query, bind_vars, batch_size)
 
   local extra = data.extra
   local cursor_id = data.id
-  local seen_cursors = {}
   while data.hasMore do
     if not cursor_id or cursor_id == "" then
       error("ArangoDB returned an incomplete cursor response")
     end
-    if seen_cursors[cursor_id] then
-      error("ArangoDB returned a repeated cursor id")
-    end
-    seen_cursors[cursor_id] = true
-
     data = database_request(config, "PUT", "/_api/cursor/" .. core.url_encode(cursor_id))
     vim.list_extend(result, data.result or {})
     if extra == nil then

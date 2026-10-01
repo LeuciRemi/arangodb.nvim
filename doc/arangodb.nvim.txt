@@ -403,6 +403,10 @@ COMMANDS                                              *arangodb.nvim-commands*
                                               *:ArangoDocumentDelete*
 :ArangoDocumentDelete
     Delete the current document after confirmation, or discard a draft.
+    Edits made while deletion or collection truncation is in progress are
+    retained in a detached recovery buffer. Saving to the deleted document is
+    blocked; use :write <file> for a local copy or :ArangoDocumentDuplicate to
+    recover the content as a new draft.
 
                                              *:ArangoDocumentRelated*
 :ArangoDocumentRelated
@@ -455,12 +459,14 @@ The following commands are local to AQL query and bind-variable buffers:
                                                         *:ArangoAqlHistory*
 :ArangoAqlHistory
     Search local query history with snacks.nvim and restore an entry without
-    executing it.
+    executing it. Loading into an attached .aql file keeps changes marked as
+    modified and asks before replacing unsaved query edits.
 
                                                         *:ArangoAqlLibrary-local*
 :ArangoAqlLibrary
     Browse, load, or delete named queries scoped to the current connection and
-    database without executing them.
+    database without executing them. Loading into an attached .aql file uses
+    the same protection for unsaved query edits as :ArangoAqlHistory.
 
                                                            *:ArangoAqlSave*
 :ArangoAqlSave
@@ -478,7 +484,8 @@ pages are cached locally and do not trigger another network request.
                                              *:ArangoAqlResultFormat*
 :ArangoAqlResultFormat [json|table]
     Switch the current result page between JSON and a Markdown table. With no
-    argument, toggle between both formats.
+    argument, toggle between both formats. Explain and Validate responses
+    always use JSON to preserve their structured details.
 
                                                     *:ArangoAqlExport*
 :ArangoAqlExport [path]

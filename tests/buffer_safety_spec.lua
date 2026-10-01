@@ -53,7 +53,230 @@ local function with_browser(client, callback)
   end
 end
 
+local function with_browser_prompts(callback)
+  local previous_snacks = package.loaded.snacks
+  local previous_confirm = vim.fn.confirm
+  local previous_input = vim.ui.input
+  local picker
+  package.loaded.snacks = {
+    picker = function(opts)
+      picker = {
+        opts = opts,
+        closed = false,
+        input = { filter = { search = "" } },
+        find = function() end,
+        update_titles = function() end,
+        close = function(self)
+          self.closed = true
+          if self.opts.on_close then
+            self.opts.on_close()
+          end
+        end,
+      }
+      return picker
+    end,
+  }
+  vim.fn.confirm = function()
+    return 1
+  end
+  vim.ui.input = function(_, done)
+    done("renamed")
+  end
+  local ok, err = xpcall(function()
+    callback(function()
+      return picker
+    end)
+  end, debug.traceback)
+  package.loaded.snacks = previous_snacks
+  vim.fn.confirm = previous_confirm
+  vim.ui.input = previous_input
+  if not ok then
+    error(err, 0)
+  end
+end
+
+local function deletion_preserves_pending_edits(action)
+  with_browser_prompts(function(current_picker)
+    local complete
+    local saves = 0
+    local deletes = 0
+    local function remove(_, _, done)
+      deletes = deletes + 1
+      complete = done
+      return { cancel = function() end }
+    end
+    with_browser({
+      delete_document_async = remove,
+      truncate_collection_async = remove,
+      save_document_async = function()
+        saves = saves + 1
+      end,
+    }, function(browser)
+      browser.open_document(connection, doc(1))
+      local buf = buffer(connection)
+      if action == "buffer" then
+        vim.api.nvim_buf_call(buf, function()
+          vim.cmd("ArangoDocumentDelete")
+        end)
+      else
+        browser.open({ kind = "collection", config = connection, collection = "items" })
+        local picker = current_picker()
+        if action == "truncate" then
+          picker.opts.actions.arango_truncate_collection(picker)
+        else
+          picker.opts.actions.arango_delete_document(picker, { item = { id = "items/a" } })
+        end
+      end
+      h.eq(1, deletes)
+      local edited = '{"_id":"items/a","_key":"a","value":"recover this"}'
+      replace(buf, edited)
+      complete(nil, {})
+      h.eq(true, vim.api.nvim_buf_is_valid(buf))
+      h.eq(edited, contents(buf))
+      h.eq(true, vim.bo[buf].modified)
+      h.eq(true, vim.b[buf].arangodb_document_deleted)
+      h.eq(nil, vim.b[buf].arangodb_document_pending)
+      h.matches("^arangodb%-deleted://", vim.api.nvim_buf_get_name(buf))
+      h.eq("", vim.bo[buf].buftype)
+
+      vim.api.nvim_buf_call(buf, function()
+        vim.cmd("ArangoDocumentSave")
+        vim.cmd("ArangoDocumentDelete")
+      end)
+      h.eq(0, saves)
+      h.eq(1, deletes)
+
+      -- A new document with the same id must not reuse the detached buffer,
+      -- and the detached edits must not block its subsequent deletion.
+      browser.open_document(connection, doc(9))
+      local fresh = buffer(connection)
+      assert(fresh ~= buf)
+      vim.api.nvim_buf_call(fresh, function()
+        vim.cmd("ArangoDocumentDelete")
+      end)
+      h.eq(2, deletes)
+      complete(nil, {})
+      h.eq(false, vim.api.nvim_buf_is_valid(fresh))
+      h.eq(true, vim.api.nvim_buf_is_valid(buf))
+      h.eq(edited, contents(buf))
+
+      local path = vim.fn.tempname() .. ".json"
+      local written, write_err = pcall(vim.api.nvim_buf_call, buf, function()
+        vim.cmd("write " .. vim.fn.fnameescape(path))
+      end)
+      local saved = vim.fn.filereadable(path) == 1 and table.concat(vim.fn.readfile(path), "\n") or nil
+      vim.fn.delete(path)
+      assert(written, write_err)
+      h.eq(edited, saved)
+      h.eq(0, saves)
+    end)
+  end)
+end
+
 return {
+  h.test("collection rename preserves duplicated draft contents and save destination", function()
+    with_browser_prompts(function(current_picker)
+      local renamed
+      local created
+      with_browser({
+        rename_collection_async = function(_, _, _, done)
+          renamed = done
+          return { cancel = function() end }
+        end,
+        create_document_async = function(_, collection, payload)
+          created = { collection = collection, payload = payload }
+          return { cancel = function() end }
+        end,
+      }, function(browser)
+        browser.open_document(connection, doc({ name = "copied", nested = { false, 42 } }))
+        local source = buffer(connection)
+        vim.api.nvim_set_current_buf(source)
+        vim.cmd("ArangoDocumentDuplicate")
+        local draft = vim.api.nvim_get_current_buf()
+        assert(draft ~= source)
+        h.eq(true, vim.b[draft].arangodb_document_is_new)
+        h.eq(false, vim.bo[draft].modified)
+        local expected = vim.json.decode(contents(draft))
+        vim.api.nvim_buf_delete(source, { force = true })
+
+        browser.open({ kind = "collections", config = connection })
+        local picker = current_picker()
+        picker.opts.actions.arango_rename_collection(picker, { item = { name = "items" } })
+        assert(vim.wait(1000, function()
+          return renamed ~= nil
+        end))
+        renamed(nil, { name = "renamed" })
+        expected._id = "renamed/" .. expected._key
+        h.eq(expected, vim.json.decode(contents(draft)))
+        h.eq(expected, vim.b[draft].arangodb_document)
+        h.eq("renamed", vim.b[draft].arangodb_document_collection)
+        h.eq(true, vim.b[draft].arangodb_document_is_new)
+        h.eq(false, vim.bo[draft].modified)
+        write(draft)
+        h.eq({ collection = "renamed", payload = expected }, created)
+      end)
+    end)
+  end),
+
+  h.test("document deletion detaches edits made while its request is pending", function()
+    deletion_preserves_pending_edits("buffer")
+  end),
+
+  h.test("picker deletion detaches edits made while its request is pending", function()
+    deletion_preserves_pending_edits("picker")
+  end),
+
+  h.test("collection truncation detaches edits made while its request is pending", function()
+    deletion_preserves_pending_edits("truncate")
+  end),
+
+  h.test("truncation cancels detached buffer requests and ignores their late callbacks", function()
+    with_browser_prompts(function(current_picker)
+      local truncated
+      local saved
+      local cancelled = 0
+      with_browser({
+        truncate_collection_async = function(_, _, done)
+          truncated = done
+          return { cancel = function() end }
+        end,
+        save_document_async = function(_, _, _, _, done)
+          saved = done
+          return {
+            cancel = function()
+              cancelled = cancelled + 1
+            end,
+          }
+        end,
+      }, function(browser)
+        browser.open_document(connection, doc(1))
+        local buf = buffer(connection)
+        browser.open({ kind = "collections", config = connection })
+        local picker = current_picker()
+        picker.opts.actions.arango_truncate_collection(picker, { item = { name = "items" } })
+        local edited = '{"_id":"items/a","_key":"a","value":2}'
+        replace(buf, edited)
+        write(buf)
+        truncated(nil, {})
+        h.eq(1, cancelled)
+        h.eq(true, vim.b[buf].arangodb_document_deleted)
+        saved(nil, doc(2, "2"))
+        h.eq(edited, contents(buf))
+        h.eq(true, vim.bo[buf].modified)
+        h.eq(true, vim.b[buf].arangodb_document_deleted)
+        h.eq(nil, vim.b[buf].arangodb_document_pending)
+        browser.open_document(connection, vim.tbl_extend("force", doc(9), { buf = buf, write_tick = 0 }))
+        h.eq(edited, contents(buf))
+        vim.api.nvim_set_current_buf(buf)
+        vim.cmd("ArangoDocumentDuplicate")
+        local draft = vim.api.nvim_get_current_buf()
+        assert(draft ~= buf)
+        h.eq(true, vim.b[draft].arangodb_document_is_new)
+        h.eq(2, vim.json.decode(contents(draft)).value)
+      end)
+    end)
+  end),
+
   h.test("document buffers isolate configured endpoints and credentials", function()
     local saved = {}
     local variants = {

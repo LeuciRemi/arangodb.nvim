@@ -31,13 +31,15 @@ local function buffer_text(buf)
   return table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n")
 end
 
-local function set_buffer_text(buf, text)
+local function set_buffer_text(buf, text, keep_modified)
   local modifiable = vim.bo[buf].modifiable
   local readonly = vim.bo[buf].readonly
   vim.bo[buf].readonly = false
   vim.bo[buf].modifiable = true
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(text, "\n", { plain = true }))
-  vim.bo[buf].modified = false
+  if not keep_modified then
+    vim.bo[buf].modified = false
+  end
   vim.bo[buf].modifiable = modifiable
   vim.bo[buf].readonly = readonly
 end
@@ -638,7 +640,22 @@ local function open_bind_vars(session)
 end
 
 local function restore_history(session, entry)
-  set_buffer_text(session.query_buf, entry.query)
+  if not valid_buffer(session.query_buf) then
+    return false
+  end
+  if session.attached and vim.bo[session.query_buf].modified then
+    local answer = vim.fn.confirm(
+      "Replace unsaved changes in attached AQL file?\n" .. vim.api.nvim_buf_get_name(session.query_buf),
+      "&Replace\n&Cancel",
+      2
+    )
+    if answer ~= 1 then
+      return false
+    end
+  end
+  if not session.attached or buffer_text(session.query_buf) ~= entry.query then
+    set_buffer_text(session.query_buf, entry.query, session.attached)
+  end
   session.bind_vars = vim.deepcopy(entry.bind_vars or {})
   if valid_buffer(session.bind_buf) then
     set_buffer_text(session.bind_buf, bind_vars_text(session.bind_vars))
@@ -647,6 +664,7 @@ local function restore_history(session, entry)
   if win then
     vim.api.nvim_set_current_win(win)
   end
+  return true
 end
 
 local function open_history(session)
@@ -762,8 +780,9 @@ open_library = function(session)
       end
       vim.ui.select({ "Load", "Delete" }, browser_ui.select_options({ prompt = entry.name }), function(action)
         if action == "Load" then
-          restore_history(session, entry)
-          session.library_name = entry.name
+          if restore_history(session, entry) then
+            session.library_name = entry.name
+          end
         elseif
           action == "Delete" and vim.fn.confirm("Delete named query " .. entry.name .. "?", "&No\n&Yes", 1) == 2
         then

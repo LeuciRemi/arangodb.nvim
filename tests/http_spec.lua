@@ -1,6 +1,196 @@
 local h = require("tests.helpers")
 
+local function with_http_server(on_request, callback)
+  local uv = vim.uv or vim.loop
+  local server = assert(uv.new_tcp())
+  local clients = {}
+  local state = { requests = 0, disconnected = 0 }
+  local server_error
+  assert(server:bind("127.0.0.1", 0))
+  assert(server:listen(8, function(err)
+    if err then
+      server_error = err
+      return
+    end
+    local client = assert(uv.new_tcp())
+    clients[#clients + 1] = client
+    server:accept(client)
+    local received = ""
+    local handled = false
+    client:read_start(function(read_err, chunk)
+      if read_err then
+        server_error = read_err
+      elseif not chunk then
+        state.disconnected = state.disconnected + 1
+      elseif not handled then
+        received = received .. chunk
+        if received:find("\r\n\r\n", 1, true) then
+          handled = true
+          state.requests = state.requests + 1
+          local ok, response = pcall(on_request, received)
+          if not ok then
+            server_error = response
+          elseif response then
+            client:write(response, function()
+              if not client:is_closing() then
+                client:close()
+              end
+            end)
+          end
+        end
+      end
+    end)
+  end))
+
+  local ok, err = xpcall(function()
+    callback(server:getsockname().port, state)
+  end, debug.traceback)
+  server:close()
+  for _, client in ipairs(clients) do
+    if not client:is_closing() then
+      client:close()
+    end
+  end
+  if not ok then
+    error(err, 0)
+  end
+  if server_error then
+    error(server_error, 0)
+  end
+end
+
 return {
+  h.test("plain HTTP resolves localhost and reaches a local server", function()
+    with_http_server(function(request)
+      h.matches("^GET /_api/version HTTP/1.1", request)
+      return "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+    end, function(port)
+      local response = require("arangodb.http").request({ host = "localhost", port = port, path = "/_api/version" })
+      h.eq(200, response.status)
+      h.eq("{}", response.body)
+    end)
+  end),
+
+  h.test("plain HTTP tries the next resolved address after a connection failure", function()
+    local uv = vim.uv or vim.loop
+    local original_resolve = uv.getaddrinfo
+    uv.getaddrinfo = function(_, _, _, callback)
+      vim.schedule(function()
+        callback(nil, { { addr = "::1" }, { addr = "127.0.0.1" } })
+      end)
+      return {}
+    end
+    local ok, err = xpcall(function()
+      with_http_server(function()
+        return "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+      end, function(port)
+        local response = require("arangodb.http").request({ host = "localhost", port = port, timeout = 1000 })
+        h.eq(200, response.status)
+      end)
+    end, debug.traceback)
+    uv.getaddrinfo = original_resolve
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("cancelling a pending DNS lookup ignores its late result", function()
+    local uv = vim.uv or vim.loop
+    local original_resolve, original_cancel = uv.getaddrinfo, uv.cancel
+    local lookup = {}
+    local lookup_callback
+    local lookup_cancelled = false
+    uv.getaddrinfo = function(_, _, _, callback)
+      lookup_callback = callback
+      return lookup
+    end
+    uv.cancel = function(value)
+      h.eq(lookup, value)
+      lookup_cancelled = true
+    end
+    local ok, err = xpcall(function()
+      with_http_server(function()
+        error("a cancelled DNS lookup must not open a connection")
+      end, function(port, state)
+        local calls = 0
+        local result
+        local handle = require("arangodb.http").request_async({ host = "localhost", port = port }, function(failure)
+          calls = calls + 1
+          result = failure
+        end)
+        handle.cancel()
+        lookup_callback(nil, { { addr = "127.0.0.1" } })
+        assert(vim.wait(1000, function()
+          return result ~= nil
+        end))
+        h.eq(true, lookup_cancelled)
+        h.eq(true, require("arangodb.errors").is(result, "cancelled"))
+        vim.wait(20, function()
+          return calls > 1 or state.requests > 0
+        end)
+        h.eq(1, calls)
+        h.eq(0, state.requests)
+      end)
+    end, debug.traceback)
+    uv.getaddrinfo, uv.cancel = original_resolve, original_cancel
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("cancelling a connected HTTP request closes its socket once", function()
+    with_http_server(function() end, function(port, state)
+      local calls = 0
+      local result
+      local handle = require("arangodb.http").request_async({ host = "localhost", port = port }, function(err)
+        calls = calls + 1
+        result = err
+      end)
+      assert(vim.wait(1000, function()
+        return state.requests == 1
+      end))
+      handle.cancel()
+      handle.cancel()
+      assert(vim.wait(1000, function()
+        return result ~= nil and state.disconnected == 1
+      end))
+      h.eq(true, require("arangodb.errors").is(result, "cancelled"))
+      h.eq(1, calls)
+    end)
+  end),
+
+  h.test("curl transport preserves raw chunked framing and body byte lengths", function()
+    local original_system = vim.system
+    -- Use real curl against a local HTTP server: TLS does not affect transfer
+    -- decoding, and replacing only the URL avoids a test certificate dependency.
+    vim.system = function(args, opts, callback)
+      local forwarded = vim.deepcopy(args)
+      for index, arg in ipairs(forwarded) do
+        if arg == "--url" then
+          forwarded[index + 1] = forwarded[index + 1]:gsub("^https://", "http://")
+          break
+        end
+      end
+      return original_system(forwarded, opts, callback)
+    end
+    local ok, err = xpcall(function()
+      local body = '{\r\n  "result": true\r\n}'
+      with_http_server(function()
+        return "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n"
+          .. string.format("%x\r\n%s\r\n0\r\n\r\n", #body, body)
+      end, function(port)
+        local response = require("arangodb.http").request({ scheme = "https", host = "localhost", port = port })
+        h.eq(200, response.status)
+        h.eq(body, response.body)
+        h.eq(true, vim.json.decode(response.body).result)
+      end)
+    end, debug.traceback)
+    vim.system = original_system
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
   h.test("HTTPS requests keep headers and credentials out of process arguments", function()
     local original_system = vim.system
     local captured_args

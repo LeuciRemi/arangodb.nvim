@@ -75,6 +75,63 @@ local function base_client(overrides)
   }, overrides or {})
 end
 
+local function with_saved_query_picker(entry, callback)
+  local history = require("arangodb.aql_history")
+  local library = require("arangodb.aql_library")
+  local original_history_load = history.load
+  local original_library_load = library.load
+  local original_snacks = package.loaded["snacks"]
+  local original_select = vim.ui.select
+  local original_confirm = vim.fn.confirm
+  local confirmation = { answer = 2, prompts = {} }
+  history.load = function()
+    return { entry }
+  end
+  library.load = history.load
+  package.loaded["snacks"] = {
+    picker = function(opts)
+      local selected
+      opts.finder()(function(item)
+        selected = item
+      end)
+      opts.confirm({ close = function() end }, selected)
+    end,
+  }
+  vim.ui.select = function(items, _, done)
+    done(items[1])
+  end
+  vim.fn.confirm = function(message, _, default)
+    confirmation.prompts[#confirmation.prompts + 1] = message
+    h.eq(2, default)
+    return confirmation.answer
+  end
+
+  local ok, err = xpcall(function()
+    callback(confirmation)
+  end, debug.traceback)
+  history.load = original_history_load
+  library.load = original_library_load
+  package.loaded["snacks"] = original_snacks
+  vim.ui.select = original_select
+  vim.fn.confirm = original_confirm
+  if not ok then
+    error(err, 0)
+  end
+end
+
+local function with_query_file(callback)
+  local path = vim.fn.tempname() .. ".aql"
+  vim.fn.writefile({ "RETURN 1" }, path)
+  local ok, err = xpcall(function()
+    vim.cmd("edit " .. vim.fn.fnameescape(path))
+    callback(vim.api.nvim_get_current_buf(), path)
+  end, debug.traceback)
+  vim.fn.delete(path)
+  if not ok then
+    error(err, 0)
+  end
+end
+
 return {
   h.test("AQL editor opens bind variables and keeps the query focused", function()
     with_aql(base_client(), function(aql)
@@ -443,6 +500,135 @@ return {
       h.eq("", vim.bo[buf].buftype)
       h.eq("RETURN 42", table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
       h.eq(2, vim.fn.exists(":ArangoAqlExecute"))
+    end)
+  end),
+
+  h.test("loading history or library protects dirty attached AQL files", function()
+    local entry = {
+      name = "saved query",
+      connection = "local",
+      database = "test",
+      query = "RETURN @value",
+      bind_vars = { value = 42 },
+    }
+    for _, command in ipairs({ "ArangoAqlHistory", "ArangoAqlLibrary" }) do
+      with_saved_query_picker(entry, function(confirmation)
+        with_aql(base_client(), function(aql)
+          with_query_file(function(buf, path)
+            local session = aql.attach({ config = config, connection = "local", buf = buf, bind_vars = { old = 1 } })
+            session.library_name = "original query"
+            vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "RETURN 'unsaved'" })
+            vim.api.nvim_buf_set_lines(session.bind_buf, 0, -1, false, { '{"old": 2}' })
+            vim.api.nvim_buf_call(buf, function()
+              vim.cmd(command)
+            end)
+            h.eq({ "RETURN 'unsaved'" }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+            h.eq(true, vim.bo[buf].modified)
+            h.eq({ old = 1 }, session.bind_vars)
+            h.eq({ '{"old": 2}' }, vim.api.nvim_buf_get_lines(session.bind_buf, 0, -1, false))
+            h.eq("original query", session.library_name)
+            h.eq(1, #confirmation.prompts)
+            h.matches("Replace unsaved changes", confirmation.prompts[1])
+            h.eq(true, confirmation.prompts[1]:find(path, 1, true) ~= nil)
+
+            confirmation.answer = 1
+            vim.api.nvim_buf_call(buf, function()
+              vim.cmd(command)
+            end)
+            h.eq({ entry.query }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+            h.eq(true, vim.bo[buf].modified)
+            h.eq(entry.bind_vars, session.bind_vars)
+            h.eq(
+              entry.bind_vars,
+              vim.json.decode(table.concat(vim.api.nvim_buf_get_lines(session.bind_buf, 0, -1, false), "\n"))
+            )
+            h.eq(command == "ArangoAqlLibrary" and entry.name or "original query", session.library_name)
+            h.eq({ "RETURN 1" }, vim.fn.readfile(path))
+            h.eq(2, #confirmation.prompts)
+            vim.api.nvim_buf_call(buf, function()
+              vim.cmd("write")
+            end)
+            h.eq({ entry.query }, vim.fn.readfile(path))
+            h.eq(false, vim.bo[buf].modified)
+          end)
+        end)
+      end)
+    end
+  end),
+
+  h.test("loading saved queries marks clean attached files dirty only when text changes", function()
+    local entry = { name = "saved", connection = "local", database = "test", query = "RETURN 42" }
+    for _, command in ipairs({ "ArangoAqlHistory", "ArangoAqlLibrary" }) do
+      with_saved_query_picker(entry, function(confirmation)
+        with_aql(base_client(), function(aql)
+          with_query_file(function(buf, path)
+            aql.attach({ config = config, connection = "local", buf = buf })
+            h.eq(false, vim.bo[buf].modified)
+            vim.api.nvim_buf_call(buf, function()
+              vim.cmd(command)
+            end)
+            h.eq(true, vim.bo[buf].modified)
+            h.eq({ entry.query }, vim.api.nvim_buf_get_lines(buf, 0, -1, false))
+            h.eq({ "RETURN 1" }, vim.fn.readfile(path))
+            vim.api.nvim_buf_call(buf, function()
+              vim.cmd("write")
+              vim.cmd(command)
+            end)
+            h.eq(false, vim.bo[buf].modified)
+            h.eq(0, #confirmation.prompts)
+          end)
+        end)
+      end)
+    end
+  end),
+
+  h.test("loading saved queries retains scratch buffer behavior", function()
+    local entry = { name = "saved", connection = "local", database = "test", query = "RETURN 42" }
+    for _, command in ipairs({ "ArangoAqlHistory", "ArangoAqlLibrary" }) do
+      with_saved_query_picker(entry, function(confirmation)
+        with_aql(base_client(), function(aql)
+          local session = aql.open({ config = config, connection = "local", query = "RETURN 1" })
+          vim.api.nvim_buf_set_lines(session.query_buf, 0, -1, false, { "RETURN 2" })
+          vim.api.nvim_buf_call(session.query_buf, function()
+            vim.cmd(command)
+          end)
+          h.eq({ entry.query }, vim.api.nvim_buf_get_lines(session.query_buf, 0, -1, false))
+          h.eq("nofile", vim.bo[session.query_buf].buftype)
+          h.eq(false, vim.bo[session.query_buf].modified)
+          h.eq(0, #confirmation.prompts)
+        end)
+      end)
+    end
+  end),
+
+  h.test("table preference preserves explain and validate responses and resumes for execution", function()
+    with_aql(base_client(), function(aql)
+      require("arangodb.config").setup({ aql = { result_format = "table", history = { enabled = false } } })
+      local session = aql.open({ config = config, query = "RETURN 1" })
+      for _, mode in ipairs({ "explain", "validate" }) do
+        vim.api.nvim_buf_call(session.query_buf, function()
+          vim.cmd(mode == "explain" and "ArangoAqlExplain" or "ArangoAqlValidate")
+        end)
+        assert(vim.wait(1000, function()
+          return session.current_result ~= nil and session.current_result.mode == mode
+        end))
+        vim.api.nvim_buf_call(session.result_buf, function()
+          vim.cmd("ArangoAqlResultFormat table")
+        end)
+        h.eq("json", vim.bo[session.result_buf].filetype)
+        local rendered =
+          vim.json.decode(table.concat(vim.api.nvim_buf_get_lines(session.result_buf, 0, -1, false), "\n"))
+        h.eq(session.current_result.response, rendered.response)
+        h.eq("table", session.result_format)
+      end
+      vim.api.nvim_buf_call(session.query_buf, function()
+        vim.cmd("ArangoAqlExecute")
+      end)
+      assert(vim.wait(1000, function()
+        return session.current_result.mode == "execute"
+      end))
+      h.eq("markdown", vim.bo[session.result_buf].filetype)
+      h.matches("| 1 |", table.concat(vim.api.nvim_buf_get_lines(session.result_buf, 0, -1, false), "\n"))
     end)
   end),
 }

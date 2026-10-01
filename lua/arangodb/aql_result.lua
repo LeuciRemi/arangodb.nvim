@@ -99,7 +99,7 @@ end
 
 --- Render an envelope in a supported interactive format.
 function M.render(envelope, format)
-  if format == "table" then
+  if format == "table" and envelope.response == nil then
     return M.table_text(envelope), "markdown"
   end
   return utils.json_pretty(envelope), "json"

@@ -17,6 +17,8 @@ local state = {
 }
 
 local ns = vim.api.nvim_create_namespace("arangodb.nvim")
+local cancel_document_requests = {}
+local document_write_autocmds = {}
 local browse_collection
 local browse_collections
 local go_back
@@ -401,7 +403,7 @@ local function arangodb_document_buffers(opts)
     local is_draft = vim.b[buf].arangodb_document_is_new == true
     local has_document = vim.b[buf].arangodb_document_id ~= nil
       or (opts.include_drafts ~= false and is_draft and vim.b[buf].arangodb_document_collection ~= nil)
-    if vim.api.nvim_buf_is_valid(buf) and has_document then
+    if vim.api.nvim_buf_is_valid(buf) and has_document and vim.b[buf].arangodb_document_deleted ~= true then
       local matches = true
       if
         opts.config
@@ -454,7 +456,38 @@ end
 
 local function close_document_buffers(opts)
   for _, buf in ipairs(arangodb_document_buffers(opts)) do
-    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    if vim.bo[buf].modified then
+      -- The request may have been in flight while the user continued editing.
+      -- Keep those edits separate from any future document with the same id.
+      vim.b[buf].arangodb_document_deleted = true
+      if cancel_document_requests[buf] then
+        cancel_document_requests[buf]()
+      end
+      if document_write_autocmds[buf] then
+        vim.api.nvim_del_autocmd(document_write_autocmds[buf])
+        document_write_autocmds[buf] = nil
+      end
+      vim.bo[buf].buftype = ""
+      local name = vim.api.nvim_buf_get_name(buf):gsub("^arangodb%-buffer://", "arangodb-deleted://")
+      pcall(vim.api.nvim_buf_set_name, buf, name .. "/" .. buf)
+      vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+      vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, {
+        virt_text = {
+          {
+            " Document deleted; local edits preserved. :write <file> or :ArangoDocumentDuplicate to recover. ",
+            "WarningMsg",
+          },
+        },
+        virt_text_pos = "right_align",
+      })
+      vim.notify(
+        "Document deleted on server; local edits preserved in " .. vim.api.nvim_buf_get_name(buf),
+        vim.log.levels.WARN,
+        { title = "ArangoDB" }
+      )
+    else
+      pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
   end
 end
 
@@ -729,13 +762,14 @@ refresh_collection_document_buffers = function(config, old_collection, new_colle
       local ok, payload = pcall(get_current_document_payload, buf)
       local key = ok and vim.trim(payload._key or "") or nil
       if key and key ~= "" then
+        payload._id = draft_document_id(new_collection, key)
         M.open_document(config, {
           database = config.database,
           id = draft_document_id(new_collection, key),
           key = key,
           collection = new_collection,
-          document = draft_document_payload(new_collection, key),
-          preview = draft_document_preview(new_collection, key),
+          document = payload,
+          preview = utils.json_pretty(payload),
           buf = buf,
           show = false,
           is_new = true,
@@ -1453,7 +1487,30 @@ local function document_actions(config, buf)
 
   local active_request
 
+  cancel_document_requests[buf] = function()
+    if active_request and active_request.cancel then
+      active_request.cancel()
+    end
+    active_request = nil
+    vim.b[buf].arangodb_document_pending = nil
+  end
+
+  local function document_deleted()
+    if vim.b[buf].arangodb_document_deleted ~= true then
+      return false
+    end
+    vim.notify(
+      "This document was deleted on the server. Use :write <file> or :ArangoDocumentDuplicate to recover local edits.",
+      vim.log.levels.WARN,
+      { title = "ArangoDB" }
+    )
+    return true
+  end
+
   local function buffer_request(title, starter, on_success, on_error)
+    if document_deleted() then
+      return
+    end
     if active_request then
       vim.notify("An ArangoDB document operation is already in progress", vim.log.levels.INFO)
       return
@@ -1464,7 +1521,7 @@ local function document_actions(config, buf)
       if active_request == handle then
         active_request = nil
       end
-      if vim.api.nvim_buf_is_valid(buf) then
+      if vim.api.nvim_buf_is_valid(buf) and vim.b[buf].arangodb_document_deleted ~= true then
         vim.b[buf].arangodb_document_pending = nil
         if on_success then
           on_success(value)
@@ -1476,6 +1533,9 @@ local function document_actions(config, buf)
       end
       if active_request == handle then
         active_request = nil
+      end
+      if not vim.api.nvim_buf_is_valid(buf) or vim.b[buf].arangodb_document_deleted == true then
+        return
       end
       if on_error then
         on_error(err)
@@ -1565,6 +1625,9 @@ local function document_actions(config, buf)
   end
 
   local function save_document()
+    if document_deleted() then
+      return
+    end
     local ok, payload = pcall(get_current_document_payload, buf)
     if not ok then
       arango.notify_error(payload, "ArangoDB Save")
@@ -1625,7 +1688,7 @@ local function document_actions(config, buf)
     end
 
     local document_id = vim.b[buf].arangodb_document_id
-    if vim.b[buf].arangodb_document_is_new ~= true and document_id then
+    if vim.b[buf].arangodb_document_is_new ~= true and not vim.b[buf].arangodb_document_deleted and document_id then
       push_history({
         kind = "document",
         config = config,
@@ -1637,6 +1700,9 @@ local function document_actions(config, buf)
   end
 
   local function delete_document()
+    if document_deleted() then
+      return
+    end
     if vim.b[buf].arangodb_document_is_new == true then
       if vim.fn.confirm("Discard this draft document?", "&Discard\n&Cancel", 2) ~= 1 then
         return
@@ -1677,6 +1743,9 @@ local function document_actions(config, buf)
   end
 
   local function explore_graph()
+    if document_deleted() then
+      return
+    end
     if vim.b[buf].arangodb_document_is_new == true then
       vim.notify("Save the draft document before exploring a graph", vim.log.levels.INFO)
       return
@@ -1727,7 +1796,7 @@ local function document_actions(config, buf)
   end, {
     desc = "Return to previous ArangoDB view",
   })
-  vim.api.nvim_create_autocmd("BufWriteCmd", {
+  document_write_autocmds[buf] = vim.api.nvim_create_autocmd("BufWriteCmd", {
     buffer = buf,
     callback = save_document,
     desc = "Save current Arango document on :write",
@@ -1736,10 +1805,11 @@ local function document_actions(config, buf)
     buffer = buf,
     once = true,
     callback = function()
-      if active_request and active_request.cancel then
-        active_request.cancel()
+      if cancel_document_requests[buf] then
+        cancel_document_requests[buf]()
       end
-      active_request = nil
+      cancel_document_requests[buf] = nil
+      document_write_autocmds[buf] = nil
     end,
   })
 
@@ -1749,6 +1819,9 @@ end
 --- Open an ArangoDB document inside a regular JSON buffer.
 function M.open_document(config, doc)
   doc = doc or {}
+  if doc.buf and vim.api.nvim_buf_is_valid(doc.buf) and vim.b[doc.buf].arangodb_document_deleted == true then
+    return
+  end
   local document_id = doc.id or doc._id
   local collection = doc.collection or (type(document_id) == "string" and document_id:match("^([^/]+)/")) or nil
   local key = doc.key or (type(document_id) == "string" and document_id:match("^[^/]+/(.+)$")) or nil

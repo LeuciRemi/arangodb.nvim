@@ -23,6 +23,21 @@ return {
     h.matches('"Bob, Jr%."', csv)
   end),
 
+  h.test("structured AQL responses remain visible with table format selected", function()
+    local result = require("arangodb.aql_result")
+    for mode, response in pairs({
+      explain = { plan = { nodes = { { type = "ReturnNode" } } } },
+      validate = { parsed = true, bindVars = { "value" } },
+    }) do
+      local structured = { database = "test", mode = mode, response = response }
+      local text, filetype = result.render(structured, "table")
+      h.eq("json", filetype)
+      h.eq(structured, vim.json.decode(text))
+    end
+    local _, filetype = result.render(envelope, "table")
+    h.eq("markdown", filetype)
+  end),
+
   h.test("AQL result exports support JSON CSV and Markdown", function()
     local result = require("arangodb.aql_result")
     for _, extension in ipairs({ "json", "csv", "md" }) do

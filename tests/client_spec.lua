@@ -473,6 +473,27 @@ return {
     end)
   end),
 
+  h.test("synchronous AQL reads three batches using the same cursor id", function()
+    local requests = 0
+    with_client(function(opts)
+      requests = requests + 1
+      if requests > 1 then
+        h.matches("/_api/cursor/one%-cursor$", opts.path)
+      end
+      return json_response({
+        result = { { ["field" .. requests] = true } },
+        hasMore = requests < 3,
+        id = requests < 3 and "one-cursor" or nil,
+      })
+    end, function(client)
+      local fields = client.list_fields(config, "items", 3)
+      h.eq(3, requests)
+      for index = 1, 3 do
+        h.eq(true, vim.tbl_contains(fields, "field" .. index))
+      end
+    end)
+  end),
+
   h.test("failed collection copies remove the partially created target", function()
     local deleted_path
     with_client(function(opts)

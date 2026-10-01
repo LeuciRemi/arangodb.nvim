@@ -122,7 +122,11 @@ Pour les callbacks, commandes de mot de passe et variables de découverte, consu
 
 Dans un document, `:write` sauvegarde dans ArangoDB. `:ArangoDocumentDuplicate`, `:ArangoDocumentDelete`, `:ArangoDocumentRelated` et `:ArangoDocumentGraph` donnent accès aux actions du document. En cas de conflit de révision, la sauvegarde propose de recharger, comparer ou forcer explicitement l’écrasement.
 
+Les modifications faites pendant une suppression ou un vidage de collection sont conservées dans un buffer de récupération. Utilisez `:write <fichier>` pour enregistrer une copie locale ou `:ArangoDocumentDuplicate` pour récupérer son contenu dans un nouveau brouillon.
+
 Une requête AQL s’ouvre avec un buffer JSON pour ses variables. Les commandes et raccourcis normaux fonctionnent dans les deux buffers ; les sélections visuelles concernent uniquement la requête. L’exécution et le profilage demandent confirmation avant une mutation ; la validation et l’explication n’exécutent rien.
+
+Charger l’historique ou une requête nommée dans un fichier `.aql` attaché le laisse marqué comme modifié et demande confirmation avant de remplacer des éditions non sauvegardées. Les réponses Explain et Validate restent en JSON lorsque le format tableau est sélectionné.
 
 L’historique et les requêtes nommées sont conservés localement, avec leurs variables. Pour des requêtes sensibles, désactivez `aql.history.enabled` ou `aql.history.store_bind_vars` et évitez d’enregistrer des valeurs sensibles dans la bibliothèque. [`:help arangodb.nvim-aql`](doc/arangodb.nvim.txt) détaille le stockage, les sessions et les commandes.
 

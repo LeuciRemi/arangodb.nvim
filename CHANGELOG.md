@@ -2,6 +2,22 @@
 
 All notable changes to arangodb.nvim are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- Resolve HTTP hostnames asynchronously and try available addresses while preserving timeout and cancellation behavior.
+- Preserve raw HTTPS response bytes so curl and the HTTP parser do not both decode chunked transfer encoding.
+- Allow synchronous AQL helpers to read more than two batches from the same cursor.
+- Protect unsaved attached AQL files when loading history or named queries, and keep loaded changes marked as modified.
+- Keep Explain and Validate responses visible as JSON when table results are configured.
+- Preserve the complete contents of document drafts when their collection is renamed.
+- Retain edits made during document deletion or collection truncation in detached recovery buffers.
+
+### Tests
+
+- Cover hostname resolution, address fallback, transport cancellation, chunked responses, cursor batching, and the AQL and document-buffer regressions above.
+
 ## [0.6.2] - 2026-09-07
 
 ### Fixed

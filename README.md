@@ -247,7 +247,11 @@ For password callbacks, external commands, and server discovery variables, see [
 
 In a document buffer, `:write` saves to ArangoDB. `:ArangoDocumentDuplicate`, `:ArangoDocumentDelete`, `:ArangoDocumentRelated`, and `:ArangoDocumentGraph` provide document actions. Saves detect revision conflicts and offer reload, comparison, or explicit overwrite.
 
+Edits made while a deletion or truncation is in progress are kept in a recovery buffer. Use `:write <file>` to save a local copy or `:ArangoDocumentDuplicate` to recover the content as a new draft.
+
 AQL queries open with a companion JSON bind-variable buffer. Commands and normal-mode mappings work in both buffers; visual selections apply only to the query. Execution and profiling ask for confirmation before modification queries; validation and explain do not execute them.
+
+Loading history or a named query into an attached `.aql` file keeps it marked as modified and asks before replacing unsaved query edits. Explain and Validate responses remain JSON when table results are selected.
 
 History and named queries persist locally, including bind variables. For sensitive queries, disable `aql.history.enabled` or `aql.history.store_bind_vars`, and avoid saving sensitive values in the query library. See [`:help arangodb.nvim-aql`](doc/arangodb.nvim.txt) for storage, session, and command details.
 

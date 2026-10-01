@@ -173,6 +173,7 @@ local function curl_args(opts, scheme, host, port, method, path, headers, body, 
     "--show-error",
     "--globoff",
     "--http1.1",
+    "--raw",
     "--include",
     "--suppress-connect-headers",
     "--request",
@@ -278,7 +279,8 @@ end
 
 local function tcp_request_async(request, callback)
   local raw_request = build_request(request.method, request.path, request.headers, request.body)
-  local tcp = assert(uv.new_tcp())
+  local tcp
+  local resolver
   local timer = assert(uv.new_timer())
   local state = {
     done = false,
@@ -291,6 +293,10 @@ local function tcp_request_async(request, callback)
     end
     state.done = true
 
+    if resolver then
+      pcall(uv.cancel, resolver)
+      resolver = nil
+    end
     if timer then
       timer:stop()
       close_handle(timer)
@@ -308,39 +314,86 @@ local function tcp_request_async(request, callback)
     finish(string.format("ArangoDB request timed out after %d ms", request.timeout))
   end)
 
-  tcp:connect(request.host, request.port, function(connect_err)
+  local function connect_address(addresses, index, previous_error)
     if state.done then
       return
     end
-    if connect_err then
-      finish(connect_err)
+    if tcp then
+      close_handle(tcp)
+      tcp = nil
+    end
+    local address = addresses[index]
+    if not address then
+      finish(previous_error or "No TCP addresses found for ArangoDB host")
       return
     end
 
-    tcp:read_start(function(read_err, chunk)
+    local created, socket, socket_error = pcall(uv.new_tcp)
+    if not created or not socket then
+      finish((created and socket_error or socket) or "Unable to create ArangoDB TCP socket")
+      return
+    end
+    tcp = socket
+    local connected, connect_request, connect_error = pcall(tcp.connect, tcp, address.addr, request.port, function(err)
       if state.done then
         return
       end
-      if read_err then
-        finish(read_err)
-      elseif chunk then
-        state.chunks[#state.chunks + 1] = chunk
-      else
-        local ok, response = pcall(response_parser.parse, table.concat(state.chunks))
-        if ok then
-          finish(nil, response)
-        else
-          finish(response)
-        end
+      if err then
+        connect_address(addresses, index + 1, err)
+        return
       end
-    end)
 
-    tcp:write(raw_request, function(write_err)
-      if write_err then
-        finish(write_err)
-      end
+      tcp:read_start(function(read_err, chunk)
+        if state.done then
+          return
+        end
+        if read_err then
+          finish(read_err)
+        elseif chunk then
+          state.chunks[#state.chunks + 1] = chunk
+        else
+          local ok, response = pcall(response_parser.parse, table.concat(state.chunks))
+          if ok then
+            finish(nil, response)
+          else
+            finish(response)
+          end
+        end
+      end)
+
+      tcp:write(raw_request, function(write_err)
+        if write_err then
+          finish(write_err)
+        end
+      end)
     end)
-  end)
+    if not connected or not connect_request then
+      connect_address(addresses, index + 1, connected and connect_error or connect_request)
+    end
+  end
+
+  local resolved, lookup, lookup_error = pcall(
+    uv.getaddrinfo,
+    request.host,
+    nil,
+    { socktype = "stream" },
+    function(err, addresses)
+      resolver = nil
+      if state.done then
+        return
+      end
+      if err then
+        finish(err)
+        return
+      end
+      connect_address(addresses or {}, 1)
+    end
+  )
+  if not resolved or not lookup then
+    finish(resolved and lookup_error or lookup)
+  elseif not state.done then
+    resolver = lookup
+  end
 
   return {
     cancel = function()
@@ -375,7 +428,8 @@ local function curl_request_async(request, callback)
 
   local started, process_or_error = pcall(vim.system, args, {
     stdin = request.body,
-    text = true,
+    -- The parser validates byte lengths, including CRLF within chunked bodies.
+    text = false,
   }, function(result)
     if state.done then
       return
