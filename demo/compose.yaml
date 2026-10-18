@@ -1,7 +1,7 @@
 name: arangodb-nvim-demo
 services:
   arangodb:
-    image: arangodb:3.12.5
+    image: arangodb:3.12.12
     environment:
       ARANGO_ROOT_PASSWORD: demo-only
     ports:

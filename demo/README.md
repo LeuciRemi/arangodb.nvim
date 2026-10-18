@@ -12,7 +12,7 @@ python3 demo/seed.py
 nvim -u demo/init.lua -i NONE
 ```
 
-The container uses ArangoDB 3.12.5, binds only to `127.0.0.1:18529`, and stores
+The container uses ArangoDB 3.12.12, binds only to `127.0.0.1:18529`, and stores
 its database in temporary memory-backed storage. Its public demo credentials are
 `root` / `demo-only`. No existing database server is used. The `demo` database
 contains four users, three projects, four contribution edges, and the named graph
