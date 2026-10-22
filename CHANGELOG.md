@@ -14,6 +14,10 @@ All notable changes to arangodb.nvim are documented here.
 - Preserve the complete contents of document drafts when their collection is renamed.
 - Retain edits made during document deletion or collection truncation in detached recovery buffers.
 
+### Changed
+
+- Update StyLua to 2.6.0 in CI and contributor docs. Neovim CI keeps the 0.10.4 support floor and the current stable release (0.12.6 at update time); ArangoDB 3.12.12, snacks.nvim 2.31.0 and all GitHub Actions were already at their latest releases.
+
 ### Tests
 
 - Cover hostname resolution, address fallback, transport cancellation, chunked responses, cursor batching, and the AQL and document-buffer regressions above.
