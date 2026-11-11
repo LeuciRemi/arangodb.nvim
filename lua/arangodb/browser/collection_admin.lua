@@ -14,9 +14,33 @@ local mutable_properties = {
   "writeConcern",
 }
 
+local create_properties = {
+  "cacheEnabled",
+  "computedValues",
+  "distributeShardsLike",
+  "keyOptions",
+  "numberOfShards",
+  "replicationFactor",
+  "schema",
+  "shardKeys",
+  "shardingStrategy",
+  "waitForSync",
+  "writeConcern",
+}
+
 local function select_properties(properties)
   local result = {}
   for _, name in ipairs(mutable_properties) do
+    if properties[name] ~= nil then
+      result[name] = vim.deepcopy(properties[name])
+    end
+  end
+  return result
+end
+
+local function select_create_properties(properties)
+  local result = {}
+  for _, name in ipairs(create_properties) do
     if properties[name] ~= nil then
       result[name] = vim.deepcopy(properties[name])
     end
@@ -59,6 +83,28 @@ function M.edit_properties(config, collection, on_change)
       on_success = on_change,
     })
   end)
+end
+
+--- Open the creation properties editor for a collection named by an earlier prompt.
+function M.create_collection(config, collection, collection_type, on_success)
+  editor.open({
+    config = config,
+    name = string.format("arangodb-collection-create://%s/%s", config.database, collection),
+    title = string.format("Create %s collection %s/%s", collection_type, config.database, collection),
+    value = {
+      numberOfShards = 1,
+      replicationFactor = 1,
+      writeConcern = 1,
+      shardKeys = { "_key" },
+      waitForSync = false,
+    },
+    on_save = function(value, done)
+      return client.create_collection_async(config, collection, collection_type, select_create_properties(value), done)
+    end,
+    success_message = string.format("Collection %s created", collection),
+    on_success = on_success,
+    wipe_on_success = true,
+  })
 end
 
 local function index_label(index)

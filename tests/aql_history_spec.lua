@@ -144,4 +144,35 @@ return {
     pcall(uv.fs_unlink, path)
     config.setup()
   end),
+
+  h.test("adding history skips the entry when another instance holds the lock", function()
+    local config = require("arangodb.config")
+    local path = temporary_path()
+    config.setup({ aql = { history = { path = path } } })
+    package.loaded["arangodb.aql_history"] = nil
+    local history = require("arangodb.aql_history")
+    history.add({ connection = "local", database = "test", query = "RETURN 1", bind_vars = {} })
+    local lock = path .. ".lock"
+    local fd = assert(uv.fs_open(lock, "wx", 384))
+    uv.fs_close(fd)
+
+    local notifications = {}
+    local original_notify = vim.notify
+    vim.notify = function(message, level)
+      notifications[#notifications + 1] = { message = message, level = level }
+    end
+    local ok, err = pcall(history.add, { connection = "local", database = "test", query = "RETURN 2", bind_vars = {} })
+    vim.notify = original_notify
+
+    h.eq(true, ok, "history.add must not raise: " .. tostring(err))
+    h.eq(1, #notifications)
+    h.eq(vim.log.levels.WARN, notifications[1].level)
+    h.matches("locked by another Neovim instance", notifications[1].message)
+    local entries = history.load()
+    h.eq(1, #entries)
+    h.eq("RETURN 1", entries[1].query)
+    pcall(uv.fs_unlink, lock)
+    pcall(uv.fs_unlink, path)
+    config.setup()
+  end),
 }

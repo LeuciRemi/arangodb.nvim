@@ -57,6 +57,25 @@ local function normalize_scheme(value)
   return scheme
 end
 
+-- Proxy variables curl consults for plain HTTP requests. curl only honours the
+-- lower-case `http_proxy` name, and accepts `all_proxy` in either case.
+local PLAIN_HTTP_PROXY_ENV = { "http_proxy", "all_proxy", "ALL_PROXY" }
+
+--- Return the proxy configured for plain HTTP requests, if any.
+---
+--- Plain HTTP normally uses the libuv transport, which connects directly. When
+--- curl would apply a proxy, requests use the curl transport instead so that
+--- the proxy and `no_proxy` behave exactly as they do for `https://` requests.
+--- Reading the environment through libuv keeps this usable from fast events.
+function M.plain_http_proxy()
+  for _, name in ipairs(PLAIN_HTTP_PROXY_ENV) do
+    local value = uv and uv.os_getenv(name)
+    if type(value) == "string" and vim.trim(value) ~= "" then
+      return vim.trim(value)
+    end
+  end
+end
+
 --- Build a predictable header set for the outgoing HTTP request.
 local function build_headers(opts, host, port, body)
   local headers = {}
@@ -184,13 +203,15 @@ local function curl_args(opts, scheme, host, port, method, path, headers, body, 
     format_timeout_seconds(timeout),
   }
 
-  if opts.tls_verify == false then
-    args[#args + 1] = "--insecure"
-  end
+  if scheme == "https" then
+    if opts.tls_verify == false then
+      args[#args + 1] = "--insecure"
+    end
 
-  if type(opts.tls_ca_file) == "string" and opts.tls_ca_file ~= "" then
-    args[#args + 1] = "--cacert"
-    args[#args + 1] = opts.tls_ca_file
+    if type(opts.tls_ca_file) == "string" and opts.tls_ca_file ~= "" then
+      args[#args + 1] = "--cacert"
+      args[#args + 1] = opts.tls_ca_file
+    end
   end
 
   local header_file = write_curl_headers(curl_headers)
@@ -467,6 +488,15 @@ local function curl_request_async(request, callback)
   }
 end
 
+local function use_curl_transport(request)
+  if request.scheme == "https" then
+    return true
+  end
+  -- Plain HTTP only needs curl when the environment configures a proxy for it.
+  -- Without curl the direct libuv transport is kept, as before.
+  return M.plain_http_proxy() ~= nil and vim.fn.executable("curl") == 1
+end
+
 --- Execute a non-blocking request and return a cancellable handle.
 function M.request_async(opts, callback)
   assert(type(callback) == "function", "HTTP callback is required")
@@ -507,7 +537,7 @@ function M.request_async(opts, callback)
   end
 
   local ok, handle = pcall(function()
-    if request.scheme == "https" then
+    if use_curl_transport(request) then
       return curl_request_async(request, complete)
     end
     return tcp_request_async(request, complete)

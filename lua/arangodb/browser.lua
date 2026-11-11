@@ -26,6 +26,7 @@ local go_back
 local open_new_document
 local open_duplicate_document
 local refresh_collection_document_buffers
+local RELATED_SCAN_CONCURRENCY = 4
 
 local function plugin_options()
   return require("arangodb.config").get()
@@ -540,15 +541,50 @@ local function prompt_collection_type(picker, callback)
       prompt = "Collection type",
     }),
     function(choice)
-      if choice then
-        callback(choice)
+      if not choice then
+        restore_picker_input_focus(picker)
+        return
       end
-      restore_picker_input_focus(picker)
+      callback(choice)
     end
   )
 end
 
-local function create_collection_with_prompt(config, picker, callback)
+local function prompt_create_collection_mode(config, picker, collection, collection_type, callback, reopen)
+  vim.ui.select(
+    { "Create", "Create with properties..." },
+    picker_select_options({
+      prompt = string.format("Create %s collection %s/%s", collection_type, config.database, collection),
+    }),
+    function(choice)
+      if choice == "Create" then
+        picker_request(picker, "ArangoDB Create Collection", function(done)
+          return client.create_collection_async(config, collection, collection_type, done)
+        end, function(result)
+          if callback then
+            callback(result, collection, collection_type)
+          end
+        end)
+        restore_picker_input_focus(picker)
+      elseif choice == "Create with properties..." then
+        close_picker_then(picker, function()
+          collection_admin.create_collection(config, collection, collection_type, function(result)
+            if callback then
+              callback(result, collection, collection_type)
+            end
+            if reopen then
+              reopen(result.name or collection)
+            end
+          end)
+        end)
+      else
+        restore_picker_input_focus(picker)
+      end
+    end
+  )
+end
+
+local function create_collection_with_prompt(config, picker, callback, reopen)
   vim.ui.input({
     prompt = string.format("Create collection in %s: ", config.database),
   }, function(value)
@@ -559,13 +595,7 @@ local function create_collection_with_prompt(config, picker, callback)
     end
 
     prompt_collection_type(picker, function(collection_type)
-      picker_request(picker, "ArangoDB Create Collection", function(done)
-        return client.create_collection_async(config, collection, collection_type, done)
-      end, function(result)
-        if callback then
-          callback(result, collection, collection_type)
-        end
-      end)
+      prompt_create_collection_mode(config, picker, collection, collection_type, callback, reopen)
     end)
   end)
 end
@@ -794,6 +824,44 @@ local function document_buffer_name(config, doc)
   return utils.connection_buffer_name(string.format("arangodb-buffer://%s/%s", doc.database, doc.id), config)
 end
 
+local function render_document_title(buf, database, display_id, is_new)
+  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+  vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, {
+    virt_text = {
+      {
+        string.format(" ArangoDB%s %s/%s ", is_new and " draft" or "", database, display_id),
+        "Title",
+      },
+      {
+        is_new and "  :ArangoDocumentSave  :ArangoDocumentDuplicate  :ArangoDocumentDelete"
+          or "  :ArangoDocumentSave  :ArangoDocumentDuplicate  :ArangoDocumentDelete  :ArangoDocumentRelated  :ArangoDocumentGraph",
+        "Comment",
+      },
+    },
+    virt_text_pos = "right_align",
+  })
+end
+
+--- Move a document buffer to another collection without reloading or re-rendering its text.
+local function rename_document_buffer_identity(buf, config, new_collection)
+  local document_id = vim.b[buf].arangodb_document_id
+  local key = type(document_id) == "string" and document_id:match("^[^/]+/(.+)$") or nil
+  if not key then
+    return false
+  end
+  local renamed_id = new_collection .. "/" .. key
+  local database = vim.b[buf].arangodb_database or config.database
+  local saved = vim.b[buf].arangodb_document
+  if type(saved) == "table" then
+    saved._id = renamed_id
+  end
+  vim.b[buf].arangodb_document_id = renamed_id
+  vim.b[buf].arangodb_document_collection = new_collection
+  pcall(vim.api.nvim_buf_set_name, buf, document_buffer_name(config, { database = database, id = renamed_id }))
+  render_document_title(buf, database, renamed_id, vim.b[buf].arangodb_document_is_new == true)
+  return true
+end
+
 local function set_buffer_json(buf, text)
   local win = vim.fn.bufwinid(buf)
   local view
@@ -853,7 +921,11 @@ refresh_collection_document_buffers = function(config, old_collection, new_colle
     else
       local document_id = vim.b[buf].arangodb_document_id
       local key = type(document_id) == "string" and document_id:match("^[^/]+/(.+)$") or nil
-      if key then
+      if key and (vim.bo[buf].modified or vim.b[buf].arangodb_document_pending) then
+        -- The rename request may have been in flight while the user edited the
+        -- buffer. Keep the text and the modified flag, but retarget the identity.
+        rename_document_buffer_identity(buf, config, new_collection)
+      elseif key then
         start_async("ArangoDB Rename Collection", function(done)
           return client.get_document_async(config, new_collection .. "/" .. key, done)
         end, function(payload)
@@ -1327,79 +1399,117 @@ local function document_relations_async(config, document, callback)
       relation_values[#relation_values + 1] = document_id
     end
 
-    local pending = 0
-    local function complete_one()
-      pending = pending - 1
-      if pending == 0 then
-        table.sort(values, function(left, right)
-          return tostring(left.label) < tostring(right.label)
-        end)
-        complete(nil, values)
-      end
-    end
-
+    local queue = {}
     for _, collection_name in ipairs(collections) do
       if collection_name ~= document_collection then
-        pending = pending + 1
-        track(
-          client.list_fields_async(
-            config,
-            collection_name,
-            plugin_options().field_sample_size,
-            function(field_err, fields)
-              if cancelled or finished then
-                return
-              end
-              if field_err then
-                arango.notify_error(field_err, "ArangoDB Relations")
-                complete_one()
-                return
-              end
-              local matched_fields = {}
-              for _, field_path in ipairs(fields) do
-                local tail = path_tail(field_path)
-                if tail and candidate_lookup[tail] then
-                  matched_fields[#matched_fields + 1] = field_path
-                end
-              end
-              if #matched_fields == 0 then
-                complete_one()
-                return
-              end
-              track(
-                client.search_related_async(
-                  config,
-                  matched_fields,
-                  relation_values,
-                  2,
-                  collection_name,
-                  function(search_err, result)
-                    if search_err then
-                      arango.notify_error(search_err, "ArangoDB Relations")
-                    elseif result and result.matches and #result.matches > 0 then
-                      local display = result.matches[1].id or collection_name
-                      local fields_label = table.concat(matched_fields, ", ")
-                      values[#values + 1] = {
-                        label = string.format("%s (%s)", display, fields_label),
-                        prompt = fields_label,
-                        field = matched_fields,
-                        values = relation_values,
-                        value = document_key,
-                        collection = collection_name,
-                        id = #result.matches == 1 and result.matches[1].id or nil,
-                      }
-                    end
-                    complete_one()
-                  end
-                )
-              )
-            end
-          )
-        )
+        queue[#queue + 1] = collection_name
       end
     end
 
-    if pending == 0 then
+    local failures = {}
+    local next_index = 1
+    local running = 0
+    local start_scan
+
+    local function finish_scan()
+      running = running - 1
+      if cancelled or finished then
+        return
+      end
+      if next_index <= #queue then
+        start_scan()
+        return
+      end
+      if running > 0 then
+        return
+      end
+      if #failures > 0 then
+        vim.notify(
+          string.format(
+            "%d collection%s could not be scanned: %s",
+            #failures,
+            #failures == 1 and "" or "s",
+            errors.format(failures[1])
+          ),
+          vim.log.levels.WARN,
+          { title = "ArangoDB Relations" }
+        )
+      end
+      table.sort(values, function(left, right)
+        return tostring(left.label) < tostring(right.label)
+      end)
+      complete(nil, values)
+    end
+
+    start_scan = function()
+      local collection_name = queue[next_index]
+      next_index = next_index + 1
+      running = running + 1
+      track(
+        client.list_fields_async(
+          config,
+          collection_name,
+          plugin_options().field_sample_size,
+          function(field_err, fields)
+            if cancelled or finished then
+              return
+            end
+            if field_err then
+              failures[#failures + 1] = field_err
+              finish_scan()
+              return
+            end
+            local matched_fields = {}
+            for _, field_path in ipairs(fields) do
+              local tail = path_tail(field_path)
+              if tail and candidate_lookup[tail] then
+                matched_fields[#matched_fields + 1] = field_path
+              end
+            end
+            if #matched_fields == 0 then
+              finish_scan()
+              return
+            end
+            track(
+              client.search_related_async(
+                config,
+                matched_fields,
+                relation_values,
+                2,
+                collection_name,
+                function(search_err, result)
+                  if cancelled or finished then
+                    return
+                  end
+                  if search_err then
+                    failures[#failures + 1] = search_err
+                  elseif result and result.matches and #result.matches > 0 then
+                    local display = result.matches[1].id or collection_name
+                    local fields_label = table.concat(matched_fields, ", ")
+                    values[#values + 1] = {
+                      label = string.format("%s (%s)", display, fields_label),
+                      prompt = fields_label,
+                      field = matched_fields,
+                      values = relation_values,
+                      value = document_key,
+                      collection = collection_name,
+                      id = #result.matches == 1 and result.matches[1].id or nil,
+                    }
+                  end
+                  finish_scan()
+                end
+              )
+            )
+          end
+        )
+      )
+    end
+
+    for _ = 1, math.min(RELATED_SCAN_CONCURRENCY, #queue) do
+      start_scan()
+    end
+
+    if #queue == 0 then
       complete(nil, values)
     end
   end))
@@ -1642,14 +1752,18 @@ local function document_actions(config, buf)
 
   local function save_existing_document(payload, force)
     local changedtick = vim.api.nvim_buf_get_changedtick(buf)
+    -- A collection rename can leave the buffer text holding the previous _id.
+    -- The identity lives in the buffer variables, so send those.
+    local document_id = vim.b[buf].arangodb_document_id
+    local document_key = type(document_id) == "string" and document_id:match("^[^/]+/(.+)$") or nil
+    if document_key then
+      payload._id = document_id
+      if payload._key ~= nil then
+        payload._key = document_key
+      end
+    end
     buffer_request("ArangoDB Save", function(done)
-      return client.save_document_async(
-        config,
-        vim.b[buf].arangodb_document_id,
-        payload,
-        force and { force = true } or nil,
-        done
-      )
+      return client.save_document_async(config, document_id, payload, force and { force = true } or nil, done)
     end, function(result)
       apply_saved_result(result, false, changedtick)
     end, function(result)
@@ -1966,21 +2080,7 @@ function M.open_document(config, doc)
   vim.b[buf].arangodb_database = database
   vim.b[buf].arangodb_document_is_new = is_new
 
-  vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-  vim.api.nvim_buf_set_extmark(buf, ns, 0, 0, {
-    virt_text = {
-      {
-        string.format(" ArangoDB%s %s/%s ", is_new and " draft" or "", vim.b[buf].arangodb_database, display_id),
-        "Title",
-      },
-      {
-        is_new and "  :ArangoDocumentSave  :ArangoDocumentDuplicate  :ArangoDocumentDelete"
-          or "  :ArangoDocumentSave  :ArangoDocumentDuplicate  :ArangoDocumentDelete  :ArangoDocumentRelated  :ArangoDocumentGraph",
-        "Comment",
-      },
-    },
-    virt_text_pos = "right_align",
-  })
+  render_document_title(buf, vim.b[buf].arangodb_database, display_id, is_new)
 
   if doc.show ~= false then
     vim.cmd("buffer " .. buf)
@@ -2355,11 +2455,15 @@ browse_collections = function(config, opts, prev_picker)
         create_document(current, item)
       end,
       arango_create_collection = function(current)
+        local route = collections_route(config, opts, current_search(current))
         create_collection_with_prompt(config, current, function(result, collection)
           clear_collection_overview()
           set_picker_search(current, result.name or collection)
           refresh_picker(current)
           vim.notify(string.format("Collection %s created", result.name or collection), vim.log.levels.INFO)
+        end, function(name)
+          route.search = name
+          open_route(route)
         end)
       end,
       arango_duplicate_collection = function(current, item)

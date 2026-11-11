@@ -218,6 +218,54 @@ return {
     end)
   end),
 
+  h.test("collection rename retargets a modified document buffer without touching its text", function()
+    with_browser_prompts(function(current_picker)
+      local renamed
+      local saved
+      with_browser({
+        rename_collection_async = function(_, _, _, done)
+          renamed = done
+          return { cancel = function() end }
+        end,
+        save_document_async = function(_, id, payload, _, done)
+          saved = { id = id, payload = vim.deepcopy(payload) }
+          done(nil, {
+            id = id,
+            key = "a",
+            collection = "renamed",
+            document = payload,
+            preview = utils.json_pretty(payload),
+          })
+          return { cancel = function() end }
+        end,
+      }, function(browser)
+        browser.open_document(connection, doc(1))
+        local buf = buffer(connection)
+        browser.open({ kind = "collections", config = connection })
+        local picker = current_picker()
+        picker.opts.actions.arango_rename_collection(picker, { item = { name = "items" } })
+        assert(vim.wait(1000, function()
+          return renamed ~= nil
+        end))
+
+        local edited = '{"_id":"items/a","_key":"a","value":2}'
+        replace(buf, edited)
+        renamed(nil, { name = "renamed" })
+
+        h.eq(edited, contents(buf))
+        h.eq(true, vim.bo[buf].modified)
+        h.eq("renamed/a", vim.b[buf].arangodb_document_id)
+        h.eq("renamed", vim.b[buf].arangodb_document_collection)
+        h.matches("arangodb%-buffer://shared/renamed/a", vim.api.nvim_buf_get_name(buf))
+
+        write(buf)
+        h.eq("renamed/a", saved.id)
+        h.eq("renamed/a", saved.payload._id)
+        h.eq(false, vim.bo[buf].modified)
+      end)
+    end)
+  end),
+
   h.test("document deletion detaches edits made while its request is pending", function()
     deletion_preserves_pending_edits("buffer")
   end),

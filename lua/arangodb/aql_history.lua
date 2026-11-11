@@ -1,7 +1,10 @@
 --- Persistent, credential-free history for AQL editor sessions.
 local M = {}
 
-local uv = vim.uv or vim.loop
+local store = require("arangodb.json_store")
+
+local LABEL = "AQL history"
+local TITLE = "ArangoDB AQL History"
 
 local function history_options()
   return ((require("arangodb.config").get().aql or {}).history or {})
@@ -16,38 +19,18 @@ function M.path()
   return vim.fs.joinpath(vim.fn.stdpath("data"), "arangodb.nvim", "aql_history.json")
 end
 
-local function read_file(path)
-  local fd = uv and uv.fs_open(path, "r", 384) or nil
-  if not fd then
-    return nil
-  end
-  local stat = uv.fs_fstat(fd)
-  local content = stat and uv.fs_read(fd, stat.size, 0) or nil
-  uv.fs_close(fd)
-  return content
+local function valid_entry(entry)
+  return type(entry) == "table" and type(entry.query) == "string"
 end
 
---- Load valid history entries, returning an optional warning for corrupt files.
-function M.load()
-  local opts = history_options()
-  if opts.enabled == false then
-    return {}
-  end
-  local content = read_file(M.path())
-  if not content or content == "" then
-    return {}
-  end
-  local ok, decoded = pcall(vim.json.decode, content)
-  if not ok or type(decoded) ~= "table" or not require("arangodb.utils").is_list(decoded) then
-    return {}, "Invalid AQL history file: " .. M.path()
-  end
-  local entries = {}
-  for _, entry in ipairs(decoded) do
-    if type(entry) == "table" and type(entry.query) == "string" then
-      entries[#entries + 1] = entry
+local function valid_entries(entries)
+  local result = {}
+  for _, entry in ipairs(entries) do
+    if valid_entry(entry) then
+      result[#result + 1] = entry
     end
   end
-  return entries
+  return result
 end
 
 local function same_entry(left, right)
@@ -57,45 +40,22 @@ local function same_entry(left, right)
     and vim.deep_equal(left.bind_vars or {}, right.bind_vars or {})
 end
 
-local function back_up_corrupt(path)
-  local backup = string.format("%s.corrupt-%d", path, os.time())
-  if uv and uv.fs_rename(path, backup) then
-    vim.notify(
-      "Invalid AQL history file backed up to " .. backup,
-      vim.log.levels.WARN,
-      { title = "ArangoDB AQL History" }
-    )
-  else
-    vim.notify(
-      "Invalid AQL history file could not be backed up",
-      vim.log.levels.WARN,
-      { title = "ArangoDB AQL History" }
-    )
+--- Load valid history entries, returning an optional warning for corrupt files.
+function M.load()
+  local opts = history_options()
+  if opts.enabled == false then
+    return {}
   end
-end
-
-local function write_entries(entries)
-  assert(uv, "libuv is required to persist AQL history")
-  local path = M.path()
-  vim.fn.mkdir(vim.fs.dirname(path), "p")
-  local temporary = string.format("%s.tmp.%s", path, tostring(vim.fn.getpid()))
-  local fd = assert(uv.fs_open(temporary, "w", 384), "Unable to open temporary AQL history file")
-  local encoded = vim.json.encode(entries)
-  local ok, written, write_err = pcall(uv.fs_write, fd, encoded, 0)
-  uv.fs_close(fd)
-  if not ok or not written then
-    pcall(uv.fs_unlink, temporary)
-    error(write_err or written or "Unable to write AQL history file", 0)
+  local entries, corrupt = store.read(M.path())
+  if corrupt then
+    return {}, "Invalid AQL history file: " .. M.path()
   end
-  local renamed, rename_err = uv.fs_rename(temporary, path)
-  if not renamed then
-    pcall(uv.fs_unlink, temporary)
-    error(rename_err or "Unable to replace AQL history file", 0)
-  end
-  pcall(uv.fs_chmod, path, 384)
+  return valid_entries(entries)
 end
 
 --- Add or move an entry to the front of the bounded local history.
+--- Skipped with a warning, never raising into the AQL flow, when another
+--- Neovim instance holds the store lock.
 function M.add(entry)
   local opts = history_options()
   if opts.enabled == false then
@@ -111,24 +71,29 @@ function M.add(entry)
     sanitized.bind_vars = vim.deepcopy(entry.bind_vars or {})
   end
 
-  local existing, warning = M.load()
-  if warning then
-    back_up_corrupt(M.path())
-  end
-  local entries = { sanitized }
-  for _, item in ipairs(existing) do
-    local retained = vim.deepcopy(item)
-    if opts.store_bind_vars == false then
-      retained.bind_vars = nil
+  local ok, entries = pcall(store.update, M.path(), function(stored)
+    local updated = { sanitized }
+    for _, item in ipairs(valid_entries(stored)) do
+      local retained = vim.deepcopy(item)
+      if opts.store_bind_vars == false then
+        retained.bind_vars = nil
+      end
+      if not same_entry(retained, sanitized) then
+        updated[#updated + 1] = retained
+      end
     end
-    if not same_entry(retained, sanitized) then
-      entries[#entries + 1] = retained
+    while #updated > (opts.max_entries or 100) do
+      updated[#updated] = nil
     end
+    return updated
+  end, { label = LABEL, title = TITLE })
+  if not ok then
+    if not store.locked(entries) then
+      error(entries, 0)
+    end
+    vim.notify(tostring(entries), vim.log.levels.WARN, { title = TITLE })
+    return M.load()
   end
-  while #entries > (opts.max_entries or 100) do
-    entries[#entries] = nil
-  end
-  write_entries(entries)
   return entries
 end
 
@@ -146,22 +111,18 @@ function M.remove(entry)
     bind_vars = vim.deepcopy(entry.bind_vars or {}),
   }
 
-  local existing, warning = M.load()
-  if warning then
-    return false
-  end
-  local retained = {}
   local removed = false
-  for _, item in ipairs(existing) do
-    if not removed and same_entry(item, target) then
-      removed = true
-    else
-      retained[#retained + 1] = item
+  store.update(M.path(), function(stored)
+    local retained = {}
+    for _, item in ipairs(valid_entries(stored)) do
+      if not removed and same_entry(item, target) then
+        removed = true
+      else
+        retained[#retained + 1] = item
+      end
     end
-  end
-  if removed then
-    write_entries(retained)
-  end
+    return removed and retained or nil
+  end, { label = LABEL, title = TITLE })
   return removed
 end
 
@@ -171,12 +132,15 @@ function M.clear()
   if opts.enabled == false then
     return 0
   end
-  local existing, warning = M.load()
-  if warning or #existing == 0 then
-    return 0
-  end
-  write_entries({})
-  return #existing
+  local count = 0
+  store.update(M.path(), function(stored)
+    count = #valid_entries(stored)
+    if count == 0 then
+      return nil
+    end
+    return {}
+  end, { label = LABEL, title = TITLE })
+  return count
 end
 
 return M

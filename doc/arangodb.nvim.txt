@@ -42,15 +42,16 @@ arangodb.nvim provides a picker-based interface for ArangoDB. It can:
 - resolve passwords lazily from functions, environment variables, or commands
 - connect through HTTP or HTTPS
 
-The interface uses snacks.nvim. HTTP uses a built-in libuv transport, while
-HTTPS uses curl.
+The interface uses snacks.nvim. Plain HTTP uses a built-in libuv transport, or
+curl when an HTTP proxy is configured; HTTPS uses curl.
 
 ===============================================================================
 REQUIREMENTS                                      *arangodb.nvim-requirements*
 
 - Neovim >= 0.10
 - folke/snacks.nvim with its picker enabled (v2.31.0 is tested in CI)
-- curl for https:// connections
+- curl for https:// connections, and for http:// connections when a proxy
+  environment variable is set
 - an ArangoDB server reachable through its HTTP API (3.12 is tested)
 
 ===============================================================================
@@ -360,6 +361,14 @@ Avoid storing credentials in version-controlled configuration. Every
 NVIM_ARANGO_<NAME>_URL environment variable is detected automatically. The
 database name is read from the URL.
 
+Plain http:// connections use the built-in libuv transport. When http_proxy
+(lower-case only; curl ignores HTTP_PROXY), all_proxy, or ALL_PROXY is set to
+a non-empty value and curl is executable, they go through curl instead, which
+applies the proxy and no_proxy as it does for https://. Without curl, the
+built-in transport is used and the proxy is ignored. tls_verify and
+tls_ca_file only apply to https://. |:checkhealth| reports when plain HTTP
+uses a proxy and warns when curl is missing for it.
+
 Server-wide discovery uses these variables when auto_discover is true. They
 also build a connection when :ArangoBrowse receives an unconfigured name:
 
@@ -571,6 +580,12 @@ Named queries default to stdpath("data")/arangodb.nvim/aql_library.json and
 also use user-only permissions. They contain query text and bind variables,
 which may be sensitive, but never connection URLs or resolved passwords.
 
+History and library files may be shared by several Neovim instances. Each
+write takes an exclusive <path>.lock file, retries every 10 ms for up to one
+second, and takes over a lock older than 10 seconds. A history entry that
+cannot take the lock in time is skipped with one warning and the query still
+runs; a named-query save reports the timeout as an error.
+
 ===============================================================================
 AQL EXAMPLE                                         *arangodb.nvim-aql-example*
 
@@ -670,6 +685,17 @@ mapping (<C-x> by default) for creating, inspecting, and deleting indexes.
 <Esc> returns from the action menu to the index selector, then from the index
 selector to the previous collection or document picker.
 
+Creating a collection prompts for a name, then a type (document or edge), then
+Create or Create with properties.... The second choice opens a JSON buffer
+named arangodb-collection-create://<database>/<collection>, seeded with
+numberOfShards 1, replicationFactor 1, writeConcern 1, shardKeys ["_key"], and
+waitForSync false. Supported keys are cacheEnabled, computedValues,
+distributeShardsLike, keyOptions, numberOfShards, replicationFactor, schema,
+shardKeys, shardingStrategy, waitForSync, and writeConcern; other keys are
+ignored. :write creates the collection. On success the buffer is wiped and the
+collections list reopens filtered on the new name; on a server error the
+buffer stays open with its content.
+
 ===============================================================================
 LUA API                                                    *arangodb.nvim-api*
 
@@ -718,9 +744,9 @@ Run:
   :checkhealth arangodb
 <
 
-The health check reports Neovim compatibility, HTTP and HTTPS transports, TLS
-settings, snacks.nvim availability, and database candidates. It never prints
-passwords.
+The health check reports Neovim compatibility, HTTP and HTTPS transports, a
+plain-HTTP proxy transport, TLS settings, snacks.nvim availability, and
+database candidates. It never prints passwords.
 
 ===============================================================================
 TROUBLESHOOTING                                *arangodb.nvim-troubleshooting*
@@ -739,6 +765,8 @@ Authentication: check username, password provider, and permissions on the
 chosen database and collections. Health checks do not test authorization.
 
 HTTPS: install curl and use tls_ca_file for private certificate authorities.
+Plain HTTP: install curl to honour http_proxy, all_proxy, or ALL_PROXY;
+without curl the built-in transport connects directly and ignores the proxy.
 
 Picker unavailable: enable snacks.nvim's picker and check plugin load order.
 
@@ -764,9 +792,10 @@ asynchronous and cancellable, and document pagination uses ArangoDB cursors.
 Local password commands may briefly block while the configured process exits.
 Cancelling AQL closes known cursors and stops the local request. Without an
 aql.max_runtime value, an already running server query follows server limits.
-HTTPS requires curl. Relation detection is heuristic. The graph explorer is a
-bounded textual neighborhood rather than a force-directed canvas. Collection
-duplication copies the supported creation properties and non-system indexes;
+HTTPS requires curl, and so does http:// when a proxy environment variable is
+set. Relation detection is heuristic. The graph explorer is a bounded textual
+neighborhood rather than a force-directed canvas. Collection duplication
+copies the supported creation properties and non-system indexes;
 server-specific properties outside that supported set are not copied. Failure
 or cancellation after target creation triggers cleanup; cleanup failures are
 reported.

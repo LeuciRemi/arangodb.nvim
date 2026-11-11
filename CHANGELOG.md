@@ -6,6 +6,9 @@ All notable changes to arangodb.nvim are documented here.
 
 ### Added
 
+- Write AQL history and named-query files under an exclusive `<path>.lock` file (retries every 10 ms for up to one second, stale locks older than 10 seconds taken over), so concurrent Neovim instances no longer lose each other's entries; a history entry that cannot be recorded in time is skipped with one warning instead of failing the query.
+- Add "Create with properties…" after the collection type prompt: a JSON editor seeded with `numberOfShards`, `replicationFactor`, `writeConcern`, `shardKeys`, and `waitForSync` defaults creates the collection on `:write`, then wipes the buffer and reopens the collections list filtered on the new name.
+- Send `http://` connections through `curl` when `http_proxy`, `all_proxy`, or `ALL_PROXY` is set, so proxy and `no_proxy` settings apply as for `https://`; without a proxy or without curl the built-in transport is still used, and `:checkhealth` reports the proxy transport.
 - Mark positioned AQL syntax errors as `ERROR` diagnostics (namespace `arangodb.nvim.aql`, source `ArangoDB`) in the query buffer when Execute, Profile, Explain, or Validate fails; the mark clears on the next request and after a success.
 - Add `:ArangoAqlExport!` to fetch every remaining cursor page and export the rows of all pages in order. It is asynchronous, cancellable with `:ArangoAqlCancel`, leaves the displayed page unchanged, and writes no file when a page request fails; `:ArangoAqlExport` still exports the displayed page.
 - Add `remove()` and `clear()` to `arangodb.aql_history`, plus a history picker actions menu with Restore, Delete entry, and confirmed Clear history.
@@ -21,6 +24,8 @@ All notable changes to arangodb.nvim are documented here.
 
 ### Fixed
 
+- Retarget a modified document buffer, or one with a pending save, when its collection is renamed, so the next `:write` saves to the new collection without reloading or discarding the buffer state.
+- Scan related documents across at most four collections concurrently and report failures once as a single warning, while keeping the successful results.
 - Resolve HTTP hostnames asynchronously and try available addresses while preserving timeout and cancellation behavior.
 - Preserve raw HTTPS response bytes so curl and the HTTP parser do not both decode chunked transfer encoding.
 - Allow synchronous AQL helpers to read more than two batches from the same cursor.
@@ -32,7 +37,7 @@ All notable changes to arangodb.nvim are documented here.
 - Treat every HTTP status outside 200-299 as an error, including redirects, and name the redirect target.
 - Release the server cursor when an AQL page request fails before re-raising the original error.
 - Raise a transport error when a synchronous HTTP request times out or is interrupted instead of reporting a silent cancellation.
-- Back up corrupt AQL history and named-query JSON files to `<path>.corrupt-<timestamp>` before replacing them.
+- Back up corrupt AQL history and named-query JSON files to `<path>.corrupt-<timestamp>` before replacing them, including when history removal or clearing rewrites the file.
 - Confirm before overwriting a named AQL query with the same name, connection, and database.
 - Reject connection URLs that cannot be parsed during `setup()`, naming the offending connection.
 - Reset AQL result pagination when Explain or Validate renders a new response.
@@ -54,11 +59,13 @@ All notable changes to arangodb.nvim are documented here.
 
 ### Tests
 
+- Cover cross-instance JSON store locking and stale-lock takeover, plain-HTTP proxy transport selection, related-scan batching and warning aggregation, collection-rename buffer retargeting, and the collection creation properties editor.
 - Cover hostname resolution, address fallback, transport cancellation, chunked responses, cursor batching, and the AQL and document-buffer regressions above.
 - Cover save and create refresh failures, non-2xx and redirect responses, cursor release on paging failures, synchronous transport timeouts, corrupt-file backups, named-query overwrite confirmation, connection URL validation, result page resets, graph node labels, resume and back navigation, collection rename reopening, index menu navigation, and completion without network I/O.
 
 ### Documentation
 
+- Document the plain-HTTP proxy transport, the "Create with properties…" collection flow, and cross-instance history and named-query locking in both READMEs and Vim help.
 - Document the AQL `bind_vars` option, `:ArangoResume` restoring the last view, connection URL validation, corrupt-file backups, and completion without network access in the READMEs and Vim help.
 - Move the result-page mappings to the result buffer, add the missing French Lua API and health check sections, and verify in CI that `doc/tags` matches the help file.
 - Document AQL error diagnostics and omni-completion, `:ArangoAqlExport!`, history and library picker actions, drop collection, sort and Open in AQL, graph truncation, and the new picker keymaps in both READMEs and Vim help.

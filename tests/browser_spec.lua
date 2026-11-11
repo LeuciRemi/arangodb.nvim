@@ -190,6 +190,203 @@ return {
     end)
   end),
 
+  h.test("open related scans every collection with at most four in flight", function()
+    local in_flight, max_in_flight, scans = 0, 0, 0
+    local scanned = {}
+    with_browser({
+      list_collections_async = function(_, done)
+        local collections = { "items" }
+        for index = 1, 10 do
+          collections[#collections + 1] = "related" .. index
+        end
+        done(nil, collections)
+        return { cancel = function() end }
+      end,
+      list_fields_async = function(_, collection, _, done)
+        scans = scans + 1
+        scanned[collection] = true
+        in_flight = in_flight + 1
+        max_in_flight = math.max(max_in_flight, in_flight)
+        vim.defer_fn(function()
+          in_flight = in_flight - 1
+          done(nil, {})
+        end, 5)
+        return { cancel = function() end }
+      end,
+    }, function(browser)
+      browser.open_document(config, document())
+      local buf = vim.fn.bufnr("arangodb-buffer://test/items/a")
+      vim.api.nvim_buf_call(buf, function()
+        vim.cmd("ArangoDocumentRelated")
+      end)
+      assert(vim.wait(2000, function()
+        return scans == 10 and in_flight == 0
+      end))
+      h.eq(4, max_in_flight)
+      for index = 1, 10 do
+        h.eq(true, scanned["related" .. index])
+      end
+      h.eq(nil, vim.b[buf].arangodb_document_pending)
+      vim.api.nvim_buf_delete(buf, { force = true })
+    end)
+  end),
+
+  h.test("open related reports failed collection scans as one warning", function()
+    local original_notify = vim.notify
+    local warnings = {}
+    vim.notify = function(message, level)
+      if level == vim.log.levels.WARN then
+        warnings[#warnings + 1] = message
+      end
+    end
+    local ok, err = xpcall(function()
+      with_browser({
+        list_collections_async = function(_, done)
+          local collections = { "items" }
+          for index = 1, 10 do
+            collections[#collections + 1] = "related" .. index
+          end
+          done(nil, collections)
+          return { cancel = function() end }
+        end,
+        list_fields_async = function(_, collection, _, done)
+          if collection == "related2" or collection == "related5" or collection == "related8" then
+            done("could not scan " .. collection)
+          else
+            done(nil, {})
+          end
+          return { cancel = function() end }
+        end,
+      }, function(browser)
+        browser.open_document(config, document())
+        local buf = vim.fn.bufnr("arangodb-buffer://test/items/a")
+        vim.api.nvim_buf_call(buf, function()
+          vim.cmd("ArangoDocumentRelated")
+        end)
+        h.eq(1, #warnings)
+        h.matches("3 collections could not be scanned", warnings[1])
+        h.matches("could not scan related2", warnings[1])
+        h.eq(nil, vim.b[buf].arangodb_document_pending)
+        vim.api.nvim_buf_delete(buf, { force = true })
+      end)
+    end, debug.traceback)
+    vim.notify = original_notify
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("create with properties sends the editor contents and wipes the buffer", function()
+    local original_input = vim.ui.input
+    local original_select = vim.ui.select
+    local created
+    local original_admin = package.loaded["arangodb.browser.collection_admin"]
+    package.loaded["arangodb.browser.collection_admin"] = nil
+    vim.ui.input = function(_, done)
+      done("newcol")
+    end
+    vim.ui.select = function(_, opts, done)
+      done(opts.prompt == "Collection type" and "document" or "Create with properties...")
+    end
+    local ok, err = xpcall(function()
+      with_picker_harness(function(harness)
+        with_browser({
+          create_collection_async = function(_, collection, collection_type, properties, done)
+            created = { collection = collection, collection_type = collection_type, properties = properties }
+            done(nil, { name = collection, database = "test" })
+            return { cancel = function() end }
+          end,
+        }, function(browser)
+          browser.open({ kind = "collections", config = config })
+          local picker = harness.last()
+          picker.opts.actions.arango_create_collection(picker)
+
+          assert(vim.wait(1000, function()
+            local name = vim.api.nvim_buf_get_name(0)
+            return name:match("arangodb%-collection%-create://test/newcol") ~= nil
+          end))
+          h.eq(true, picker.closed)
+          local buf = vim.api.nvim_get_current_buf()
+          vim.bo[buf].modifiable = true
+          vim.api.nvim_buf_set_lines(buf, 0, -1, false, { '{"numberOfShards":3,"replicationFactor":2,"bogus":true}' })
+          vim.api.nvim_buf_call(buf, function()
+            vim.cmd("write")
+          end)
+          assert(vim.wait(1000, function()
+            return not vim.api.nvim_buf_is_valid(buf)
+          end))
+          assert(vim.wait(1000, function()
+            return harness.active_count() == 1 and harness.last() ~= picker
+          end))
+          h.eq("newcol", created.collection)
+          h.eq("document", created.collection_type)
+          h.eq(3, created.properties.numberOfShards)
+          h.eq(2, created.properties.replicationFactor)
+          h.eq(nil, created.properties.bogus)
+        end)
+      end)
+    end, debug.traceback)
+    package.loaded["arangodb.browser.collection_admin"] = original_admin
+    vim.ui.input = original_input
+    vim.ui.select = original_select
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("create with properties keeps the editor and its text after a server error", function()
+    local original_input = vim.ui.input
+    local original_select = vim.ui.select
+    local attempts = 0
+    local original_admin = package.loaded["arangodb.browser.collection_admin"]
+    package.loaded["arangodb.browser.collection_admin"] = nil
+    vim.ui.input = function(_, done)
+      done("newcol")
+    end
+    vim.ui.select = function(_, opts, done)
+      done(opts.prompt == "Collection type" and "document" or "Create with properties...")
+    end
+    local ok, err = xpcall(function()
+      with_picker_harness(function(harness)
+        with_browser({
+          create_collection_async = function(_, _, _, _, done)
+            attempts = attempts + 1
+            done("collection already exists")
+            return { cancel = function() end }
+          end,
+        }, function(browser)
+          browser.open({ kind = "collections", config = config })
+          local picker = harness.last()
+          picker.opts.actions.arango_create_collection(picker)
+
+          assert(vim.wait(1000, function()
+            local name = vim.api.nvim_buf_get_name(0)
+            return name:match("arangodb%-collection%-create://test/newcol") ~= nil
+          end))
+          h.eq(true, picker.closed)
+          local buf = vim.api.nvim_get_current_buf()
+          local text = '{"numberOfShards":3}'
+          vim.bo[buf].modifiable = true
+          vim.api.nvim_buf_set_lines(buf, 0, -1, false, { text })
+          local written, write_err = pcall(vim.api.nvim_buf_call, buf, function()
+            vim.cmd("write")
+          end)
+          assert(not written, write_err)
+          h.eq(1, attempts)
+          h.eq(true, vim.api.nvim_buf_is_valid(buf))
+          h.eq(text, table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
+          vim.api.nvim_buf_delete(buf, { force = true })
+        end)
+      end)
+    end, debug.traceback)
+    package.loaded["arangodb.browser.collection_admin"] = original_admin
+    vim.ui.input = original_input
+    vim.ui.select = original_select
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
   h.test("document deletion is confirmed with its database and can be cancelled", function()
     local original_confirm = vim.fn.confirm
     local confirmations = 0

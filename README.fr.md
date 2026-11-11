@@ -27,7 +27,7 @@ Enregistré avec un conteneur ArangoDB local et des données fictives. [Reprodui
 
 - Neovim `>= 0.10` ; la CI couvre `0.10.4` et la version stable actuelle.
 - [`folke/snacks.nvim`](https://github.com/folke/snacks.nvim) avec son picker activé ; la version `2.31.0` est testée.
-- `curl` pour HTTPS. Le HTTP simple utilise libuv.
+- `curl` pour HTTPS, et pour les connexions `http://` lorsqu’un proxy HTTP est configuré. Sans proxy, le HTTP simple utilise libuv.
 - Un serveur ArangoDB accessible par son API HTTP. Les tests d’intégration couvrent ArangoDB `3.12`.
 
 ## Installation avec lazy.nvim
@@ -110,6 +110,8 @@ Une URL impossible à analyser, par exemple sans `http://` ou `https://`, provoq
 
 Les sources sont lues dans cet ordre : `setup().connections`, `vim.g.arangodb_connections`, puis les URL d’environnement. La première source est prioritaire pour un nom donné. L’authentification est facultative ; les identifiants percent-encodés et les hôtes IPv6 entre crochets sont pris en charge.
 
+Les connexions `http://` passent par le transport intégré, sauf si `http_proxy` (en minuscules uniquement, curl ignorant `HTTP_PROXY`), `all_proxy` ou `ALL_PROXY` est défini et non vide et que `curl` est installé. Elles passent alors par curl, qui applique le proxy et `no_proxy` comme pour `https://`. `tls_verify` et `tls_ca_file` ne concernent que `https://`. `:checkhealth arangodb` indique si le HTTP simple passe par un proxy et avertit si curl manque pour ce transport.
+
 Pour les callbacks, commandes de mot de passe et variables de découverte, consultez [`:help arangodb.nvim-connections`](doc/arangodb.nvim.txt). Utilisez `tls_ca_file` pour une autorité privée et conservez `tls_verify = true`.
 
 ## Utilisation
@@ -135,7 +137,7 @@ Les buffers AQL complètent les mots-clés (`k`), les fonctions intégrées d’
 
 Charger l’historique ou une requête nommée dans un fichier `.aql` attaché le laisse marqué comme modifié et demande confirmation avant de remplacer des éditions non sauvegardées. Les réponses Explain et Validate restent en JSON lorsque le format tableau est sélectionné.
 
-L’historique et les requêtes nommées sont conservés localement, avec leurs variables. Leurs pickers offrent la recherche et un aperçu et nécessitent `snacks.nvim`, sans repli sur `vim.ui.select` ; `<C-x>` ouvre un menu d’actions : Restore, Delete entry et Clear history (avec confirmation) pour l’historique, Load ou Delete (avec confirmation) pour les requêtes nommées. Enregistrer une requête nommée sous un nom existant pour la même connexion et la même base demande confirmation. Un fichier d’historique ou de bibliothèque corrompu est renommé en `<path>.corrupt-<timestamp>` avec un avertissement avant l’écriture d’un nouveau fichier. Pour des requêtes sensibles, désactivez `aql.history.enabled` ou `aql.history.store_bind_vars` et évitez d’enregistrer des valeurs sensibles dans la bibliothèque. [`:help arangodb.nvim-aql`](doc/arangodb.nvim.txt) détaille le stockage, les sessions et les commandes.
+L’historique et les requêtes nommées sont conservés localement, avec leurs variables. Leurs pickers offrent la recherche et un aperçu et nécessitent `snacks.nvim`, sans repli sur `vim.ui.select` ; `<C-x>` ouvre un menu d’actions : Restore, Delete entry et Clear history (avec confirmation) pour l’historique, Load ou Delete (avec confirmation) pour les requêtes nommées. Enregistrer une requête nommée sous un nom existant pour la même connexion et la même base demande confirmation. Un fichier d’historique ou de bibliothèque corrompu est renommé en `<path>.corrupt-<timestamp>` avec un avertissement avant l’écriture d’un nouveau fichier. Les fichiers d’historique et de requêtes nommées peuvent être partagés par plusieurs instances de Neovim : chaque écriture prend un fichier de verrou exclusif `<path>.lock`, réessaie pendant une seconde au plus et reprend un verrou de plus de dix secondes. Une entrée d’historique qui ne peut pas être enregistrée à temps est ignorée avec un avertissement, sans empêcher la requête. Pour des requêtes sensibles, désactivez `aql.history.enabled` ou `aql.history.store_bind_vars` et évitez d’enregistrer des valeurs sensibles dans la bibliothèque. [`:help arangodb.nvim-aql`](doc/arangodb.nvim.txt) détaille le stockage, les sessions et les commandes.
 
 Raccourcis par défaut dans les buffers AQL :
 
@@ -168,6 +170,8 @@ Touches par défaut du picker de documents :
 | `<C-b>` | Revenir en arrière |
 
 La navigation fonctionne en modes normal et insertion. `<C-x>` donne accès à la création, la duplication, aux schémas, aux index, à la suppression de collection et aux actions destructives. Les raccourcis d’écriture configurés explicitement restent limités au mode normal. Les opérations destructives demandent confirmation, des garde-fous protègent les buffers modifiés, et la suppression d’une collection refuse les collections système puis demande confirmation en nommant la collection et, lorsqu’il est connu, son nombre de documents. `picker_keymaps.drop_collection` ajoute une touche dédiée.
+
+La création d’une collection demande son nom et son type, puis propose *Create* ou *Create with properties…*. La seconde option ouvre un buffer JSON pré-rempli avec `numberOfShards = 1`, `replicationFactor = 1`, `writeConcern = 1`, `shardKeys = ["_key"]` et `waitForSync = false` ; modifiez-le et lancez `:write` pour créer la collection. Les propriétés acceptées sont listées dans [`:help arangodb.nvim-mappings`](doc/arangodb.nvim.txt). Une erreur serveur laisse le buffer ouvert avec son contenu ; en cas de succès il est fermé et la liste des collections se rouvre filtrée sur le nouveau nom.
 
 Dans une vue de collection, le menu d’actions propose aussi *Sort by field…* (chemin d’attribut, puis Ascending, Descending ou Default order) et *Open in AQL* (ouvre l’éditeur AQL pré-rempli avec la requête équivalente et ses variables). Le tri apparaît dans le titre et est conservé entre les pages, `:ArangoBack` et `:ArangoResume` ; le changer repart de la page 1. Ces entrées n’existent que dans les vues de collection, pas dans les vues de relations. `picker_keymaps.sort` et `picker_keymaps.open_aql` ajoutent une touche dédiée ; ils sont désactivés par défaut.
 

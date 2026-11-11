@@ -80,11 +80,20 @@ function M.open(opts)
             return
           end
           if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_changedtick(buf) == changedtick then
-            set_value(buf, current.normalize and current.normalize(saved, value) or value)
+            if not current.wipe_on_success then
+              set_value(buf, current.normalize and current.normalize(saved, value) or value)
+            end
           end
           vim.notify(current.success_message or "ArangoDB metadata updated", vim.log.levels.INFO)
           if current.on_success then
             current.on_success(saved)
+          end
+          if current.wipe_on_success then
+            vim.schedule(function()
+              if vim.api.nvim_buf_is_valid(buf) then
+                pcall(vim.api.nvim_buf_delete, buf, { force = true })
+              end
+            end)
           end
         end)
         if not started then

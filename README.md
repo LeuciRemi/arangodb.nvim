@@ -27,7 +27,7 @@ Recorded with a local ArangoDB container and fictional data. [Reproduce the demo
 
 - Neovim `>= 0.10` (CI covers `0.10.4` and the current stable release).
 - [`folke/snacks.nvim`](https://github.com/folke/snacks.nvim) with its picker enabled; `v2.31.0` is tested in CI.
-- `curl` for HTTPS connections. Plain HTTP uses the built-in libuv transport.
+- `curl` for HTTPS connections, and for `http://` connections when an HTTP proxy is configured. Without a proxy, plain HTTP uses the built-in libuv transport.
 - An ArangoDB server reachable through its HTTP API. Integration tests cover ArangoDB `3.12`.
 
 ## Installation
@@ -238,6 +238,8 @@ A URL that cannot be parsed, for example one without `http://` or `https://`, is
 
 Sources are checked in order: `setup().connections`, `vim.g.arangodb_connections`, then environment URLs. The first source wins for duplicate names. Authentication is optional; percent-encoded credentials and bracketed IPv6 hosts are supported.
 
+Plain `http://` connections use the built-in transport unless `http_proxy` (lower-case only, since curl ignores `HTTP_PROXY`), `all_proxy`, or `ALL_PROXY` is set to a non-empty value and `curl` is installed. They then go through curl, which applies the proxy and `no_proxy` exactly as it does for `https://`. `tls_verify` and `tls_ca_file` only affect `https://`. `:checkhealth arangodb` reports when plain HTTP goes through a proxy and warns if curl is missing for it.
+
 For password callbacks, external commands, and server discovery variables, see [`:help arangodb.nvim-connections`](doc/arangodb.nvim.txt). Use `tls_ca_file` for a private CA and keep `tls_verify = true`.
 
 ## Usage
@@ -263,7 +265,7 @@ AQL buffers complete keywords (`k`), ArangoDB 3.12 built-in functions (`f`, inse
 
 Loading history or a named query into an attached `.aql` file keeps it marked as modified and asks before replacing unsaved query edits. Explain and Validate responses remain JSON when table results are selected.
 
-History and named queries persist locally, including bind variables. Their pickers provide search and preview and require `snacks.nvim`; there is no `vim.ui.select` fallback. `<C-x>` opens an actions menu with Restore, Delete entry, and Clear history (confirmed) for history, and Load or Delete (confirmed) for named queries. Saving a named query over an existing name in the same connection and database asks for confirmation. A corrupt history or library file is renamed to `<path>.corrupt-<timestamp>` with a warning before a new file is written. For sensitive queries, disable `aql.history.enabled` or `aql.history.store_bind_vars`, and avoid saving sensitive values in the query library. See [`:help arangodb.nvim-aql`](doc/arangodb.nvim.txt) for storage, session, and command details.
+History and named queries persist locally, including bind variables. Their pickers provide search and preview and require `snacks.nvim`; there is no `vim.ui.select` fallback. `<C-x>` opens an actions menu with Restore, Delete entry, and Clear history (confirmed) for history, and Load or Delete (confirmed) for named queries. Saving a named query over an existing name in the same connection and database asks for confirmation. A corrupt history or library file is renamed to `<path>.corrupt-<timestamp>` with a warning before a new file is written. History and named-query files can be shared by several Neovim instances: each write takes an exclusive `<path>.lock` file, retries for up to one second, and takes over a lock older than ten seconds. If a history entry cannot be recorded in time, it is skipped with one warning and the query still runs. For sensitive queries, disable `aql.history.enabled` or `aql.history.store_bind_vars`, and avoid saving sensitive values in the query library. See [`:help arangodb.nvim-aql`](doc/arangodb.nvim.txt) for storage, session, and command details.
 
 Default AQL-buffer mappings:
 
@@ -296,6 +298,8 @@ Default document-picker actions:
 | `<C-b>` | Go back |
 
 Picker navigation works in normal and insert mode. Collection/document creation, duplication, schema and index management, collection drop, and other destructive actions are available through `<C-x>`. Explicitly configured write mappings are normal-mode-only. Destructive operations require confirmation, modified-buffer guards protect unsaved edits, and dropping a collection refuses system collections and asks for confirmation with the collection and its document count when known. Set `picker_keymaps.drop_collection` for a dedicated key.
+
+Creating a collection asks for its name and type, then offers *Create* or *Create with properties…*. The second opens a JSON buffer seeded with `numberOfShards = 1`, `replicationFactor = 1`, `writeConcern = 1`, `shardKeys = ["_key"]`, and `waitForSync = false`; edit it and run `:write` to create the collection. The accepted creation properties are listed in [`:help arangodb.nvim-mappings`](doc/arangodb.nvim.txt). A server error keeps the buffer open with its content; on success it is closed and the collections list reopens filtered on the new name.
 
 In a collection view, the actions menu also offers *Sort by field…* (attribute path, then Ascending, Descending, or Default order) and *Open in AQL* (opens the AQL editor seeded with the equivalent query and bind variables). The sort is shown in the picker title and kept across paging, `:ArangoBack`, and `:ArangoResume`; changing it restarts at page 1. Both entries are available only in collection views, not related views. Set `picker_keymaps.sort` or `picker_keymaps.open_aql` for a dedicated key; both are unset by default.
 

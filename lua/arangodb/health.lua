@@ -90,6 +90,17 @@ function M.check()
     info("install `curl` to enable https:// connections")
   end
 
+  local plain_http_proxy = require("arangodb.http").plain_http_proxy()
+  if plain_http_proxy then
+    if core.https_transport_available() then
+      info("http:// connections go through curl and proxy `" .. plain_http_proxy:gsub("%s+", " ") .. "`")
+    else
+      warn("curl not found; http:// connections ignore the configured proxy", {
+        "Install `curl` so http:// connections can go through the proxy.",
+      })
+    end
+  end
+
   if pcall(require, "snacks") then
     ok("`folke/snacks.nvim` is available")
   else

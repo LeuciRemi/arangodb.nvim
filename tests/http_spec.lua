@@ -59,6 +59,25 @@ local function with_http_server(on_request, callback)
   end
 end
 
+local PROXY_ENV_NAMES = { "http_proxy", "all_proxy", "ALL_PROXY" }
+
+local function with_proxy_env(variables, callback)
+  local saved = {}
+  for _, name in ipairs(PROXY_ENV_NAMES) do
+    saved[name] = vim.env[name]
+  end
+  for name, value in pairs(variables) do
+    vim.env[name] = value
+  end
+  local ok, err = xpcall(callback, debug.traceback)
+  for _, name in ipairs(PROXY_ENV_NAMES) do
+    vim.env[name] = saved[name]
+  end
+  if not ok then
+    error(err, 0)
+  end
+end
+
 return {
   h.test("plain HTTP resolves localhost and reaches a local server", function()
     with_http_server(function(request)
@@ -252,6 +271,105 @@ return {
     end
     h.matches("^@", header_file)
     h.eq(0, vim.fn.filereadable(header_file:sub(2)))
+  end),
+
+  h.test("plain HTTP requests use curl when a proxy is configured", function()
+    local original_system = vim.system
+    local captured_args
+    local header_contents
+
+    with_proxy_env({ http_proxy = "http://127.0.0.1:3128" }, function()
+      vim.system = function(args, _, callback)
+        captured_args = vim.deepcopy(args)
+        for index, arg in ipairs(args) do
+          if arg == "--header" then
+            header_contents = table.concat(vim.fn.readfile(args[index + 1]:sub(2)), "\n")
+            break
+          end
+        end
+        vim.schedule(function()
+          callback({
+            stdout = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}",
+            stderr = "",
+            code = 0,
+          })
+        end)
+        return { kill = function() end }
+      end
+
+      local ok, result = xpcall(function()
+        package.loaded["arangodb.http"] = nil
+        return require("arangodb.http").request({
+          scheme = "http",
+          host = "localhost",
+          port = 8529,
+          path = "/_api/version",
+          user = "reader",
+          password = "very-secret",
+          tls_verify = false,
+          tls_ca_file = "/nonexistent/ca.pem",
+        })
+      end, debug.traceback)
+
+      vim.system = original_system
+      package.loaded["arangodb.http"] = nil
+      if not ok then
+        error(result, 0)
+      end
+
+      h.eq(200, result.status)
+      local url
+      for index, arg in ipairs(captured_args) do
+        if arg == "--url" then
+          url = captured_args[index + 1]
+          break
+        end
+      end
+      h.eq("http://localhost:8529/_api/version", url)
+      local command = table.concat(captured_args, "\n")
+      h.eq(nil, command:find("reader", 1, true))
+      h.eq(nil, command:find("very-secret", 1, true))
+      h.eq(nil, command:find("Authorization", 1, true))
+      h.eq(nil, command:find("--insecure", 1, true))
+      h.eq(nil, command:find("--cacert", 1, true))
+      h.matches("Authorization: Basic ", header_contents)
+    end)
+  end),
+
+  h.test("plain HTTP keeps the libuv transport when no proxy is configured", function()
+    local original_system = vim.system
+    local curl_calls = 0
+
+    with_proxy_env({ http_proxy = nil, all_proxy = nil, ALL_PROXY = nil }, function()
+      vim.system = function()
+        curl_calls = curl_calls + 1
+        error("curl must not run without a configured proxy")
+      end
+
+      local ok, err = xpcall(function()
+        package.loaded["arangodb.http"] = nil
+        with_http_server(function(request)
+          h.matches("^GET /_api/version HTTP/1.1", request)
+          return "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+        end, function(port)
+          local response = require("arangodb.http").request({
+            scheme = "http",
+            host = "127.0.0.1",
+            port = port,
+            path = "/_api/version",
+          })
+          h.eq(200, response.status)
+          h.eq("{}", response.body)
+        end)
+      end, debug.traceback)
+
+      vim.system = original_system
+      package.loaded["arangodb.http"] = nil
+      if not ok then
+        error(err, 0)
+      end
+      h.eq(0, curl_calls)
+    end)
   end),
 
   h.test("asynchronous HTTPS requests can be cancelled", function()
