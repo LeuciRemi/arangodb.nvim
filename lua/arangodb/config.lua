@@ -25,7 +25,10 @@ M.defaults = {
     delete = false,
     duplicate = false,
     truncate = false,
+    drop_collection = false,
     rename = false,
+    sort = false,
+    open_aql = false,
   },
   document_keymaps = {
     save = nil,

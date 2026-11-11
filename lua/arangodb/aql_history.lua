@@ -132,4 +132,51 @@ function M.add(entry)
   return entries
 end
 
+--- Remove the history entry with the identity used by `add` and report whether it existed.
+function M.remove(entry)
+  local opts = history_options()
+  if opts.enabled == false then
+    return false
+  end
+  -- Entries come from `load()`: match them as stored, whatever `store_bind_vars` says now.
+  local target = {
+    connection = entry.connection,
+    database = entry.database,
+    query = entry.query,
+    bind_vars = vim.deepcopy(entry.bind_vars or {}),
+  }
+
+  local existing, warning = M.load()
+  if warning then
+    return false
+  end
+  local retained = {}
+  local removed = false
+  for _, item in ipairs(existing) do
+    if not removed and same_entry(item, target) then
+      removed = true
+    else
+      retained[#retained + 1] = item
+    end
+  end
+  if removed then
+    write_entries(retained)
+  end
+  return removed
+end
+
+--- Remove every history entry and return how many were removed.
+function M.clear()
+  local opts = history_options()
+  if opts.enabled == false then
+    return 0
+  end
+  local existing, warning = M.load()
+  if warning or #existing == 0 then
+    return 0
+  end
+  write_entries({})
+  return #existing
+end
+
 return M

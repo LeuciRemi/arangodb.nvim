@@ -15,12 +15,20 @@ local setup_bind_actions
 local open_library
 local save_named
 
+local diagnostic_namespace = vim.api.nvim_create_namespace("arangodb.nvim.aql")
+local modification_keywords = { "insert", "update", "replace", "remove", "upsert" }
+local position_pattern = "at position (%d+):(%d+)"
+
 local function options()
   return require("arangodb.config").get().aql or {}
 end
 
 local function keymaps()
   return require("arangodb.config").get().aql_keymaps or {}
+end
+
+local function picker_keymaps()
+  return require("arangodb.config").get().picker_keymaps or {}
 end
 
 local function valid_buffer(buf)
@@ -82,13 +90,27 @@ local function parse_bind_vars(session)
   return value
 end
 
+-- Trim a buffer slice and remember the 0-based buffer position of its first character.
+local function trimmed_source(text, line, col)
+  local trimmed = vim.trim(text)
+  if trimmed == "" then
+    return { text = "", line = line, col = col }
+  end
+  local leading = text:sub(1, text:find("%S") - 1)
+  local _, newlines = leading:gsub("\n", "")
+  if newlines == 0 then
+    return { text = trimmed, line = line, col = col + #leading }
+  end
+  return { text = trimmed, line = line + newlines, col = #(leading:match("[^\n]*$") or "") }
+end
+
 local function query_lines(buf, first, last)
   local lines = vim.api.nvim_buf_get_lines(buf, first - 1, last, false)
-  return vim.trim(table.concat(lines, "\n"))
+  return trimmed_source(table.concat(lines, "\n"), first - 1, 0)
 end
 
 local function full_query(session)
-  return vim.trim(buffer_text(session.query_buf))
+  return trimmed_source(buffer_text(session.query_buf), 0, 0)
 end
 
 local function visual_query(session)
@@ -105,14 +127,60 @@ local function visual_query(session)
     return query_lines(session.query_buf, start_row, end_row)
   end
   local lines = vim.api.nvim_buf_get_text(session.query_buf, start_row - 1, start_col, end_row - 1, end_col + 1, {})
-  return vim.trim(table.concat(lines, "\n"))
+  return trimmed_source(table.concat(lines, "\n"), start_row - 1, start_col)
 end
 
-local function require_query(query)
-  if type(query) ~= "string" or vim.trim(query) == "" then
+local function require_query(source)
+  local text = type(source) == "table" and source.text or source
+  if type(text) ~= "string" or vim.trim(text) == "" then
     error("AQL query is empty", 0)
   end
-  return vim.trim(query)
+  return vim.trim(text)
+end
+
+-- Read the 1-based line and column reported by an ArangoDB syntax error.
+local function error_position(err)
+  local message = type(err) == "table" and err.message or err
+  if type(message) ~= "string" then
+    return nil
+  end
+  local line, column = message:match(position_pattern)
+  if not line then
+    return nil
+  end
+  return tonumber(line), tonumber(column), message
+end
+
+local function clear_query_diagnostic(session)
+  if valid_buffer(session.query_buf) then
+    vim.diagnostic.reset(diagnostic_namespace, session.query_buf)
+  end
+end
+
+-- Report a failed AQL request and mark its position inside the query buffer.
+local function report_query_error(session, source, err)
+  notify_error(err)
+  local line, column, message = error_position(err)
+  if not line or not valid_buffer(session.query_buf) then
+    return
+  end
+  local origin = type(source) == "table" and source or {}
+  local lnum = (origin.line or 0) + line - 1
+  if lnum < 0 or lnum >= vim.api.nvim_buf_line_count(session.query_buf) then
+    return
+  end
+  local col = (line == 1 and (origin.col or 0) or 0) + math.max(column - 1, 0)
+  local text = vim.api.nvim_buf_get_lines(session.query_buf, lnum, lnum + 1, false)[1] or ""
+  vim.diagnostic.set(diagnostic_namespace, session.query_buf, {
+    {
+      lnum = lnum,
+      col = math.min(col, #text),
+      -- The server position is relative to the text sent, not to the buffer.
+      message = (message:gsub("%s+at position %d+:%d+%s*$", "")),
+      severity = vim.diagnostic.severity.ERROR,
+      source = "ArangoDB",
+    },
+  })
 end
 
 local function close_cursor(session)
@@ -140,6 +208,7 @@ end
 
 local function request(session, start, callback)
   cancel_request(session, false)
+  clear_query_diagnostic(session)
   local generation = session.request_generation
   local completed = false
   local ok, handle = pcall(start, function(err, data)
@@ -148,6 +217,9 @@ local function request(session, start, callback)
       return
     end
     session.request = nil
+    if err == nil then
+      clear_query_diagnostic(session)
+    end
     callback(err, data)
   end)
   if not ok then
@@ -240,9 +312,68 @@ local function render_page(session, index)
   M.render_result(session, envelope)
 end
 
+local function notify_busy()
+  vim.notify("An AQL request is already in progress", vim.log.levels.INFO, { title = "ArangoDB AQL" })
+end
+
+-- Append a cursor page to the session exactly like interactive pagination does.
+local function append_page(session, data)
+  if data.hasMore == true and (type(data.id) ~= "string" or data.id == "") and not session.cursor_id then
+    return "ArangoDB returned an incomplete AQL cursor response"
+  end
+  session.cursor_id = data.hasMore == true and (data.id or session.cursor_id) or nil
+  session.pages[#session.pages + 1] = data
+  return nil
+end
+
+-- Fetch every remaining cursor page without changing the displayed page.
+local function fetch_pages(session, callback)
+  local last = session.pages[#session.pages]
+  if not last or last.hasMore ~= true then
+    callback(nil)
+    return
+  end
+  if not session.cursor_id then
+    callback("ArangoDB returned an incomplete AQL cursor response")
+    return
+  end
+  request(session, function(done)
+    return client.next_aql_page_async(session.config, session.cursor_id, done)
+  end, function(err, data)
+    if err then
+      callback(err)
+      return
+    end
+    local incomplete = append_page(session, data)
+    if incomplete then
+      callback(incomplete)
+      return
+    end
+    fetch_pages(session, callback)
+  end)
+end
+
+-- Merge the rows of every fetched page into a single export envelope.
+local function all_pages_envelope(session)
+  local rows = {}
+  for _, page in ipairs(session.pages) do
+    for _, row in ipairs(page.result or {}) do
+      rows[#rows + 1] = row
+    end
+  end
+  return {
+    database = session.config.database,
+    mode = session.mode,
+    page = 1,
+    count = session.total_count or #rows,
+    hasMore = false,
+    result = rows,
+  }
+end
+
 local function next_page(session)
   if session.request then
-    vim.notify("An AQL request is already in progress", vim.log.levels.INFO, { title = "ArangoDB AQL" })
+    notify_busy()
     return
   end
   if session.page_index < #session.pages then
@@ -265,12 +396,11 @@ local function next_page(session)
       notify_error(err)
       return
     end
-    if data.hasMore == true and (type(data.id) ~= "string" or data.id == "") and not session.cursor_id then
-      notify_error("ArangoDB returned an incomplete AQL cursor response")
+    local incomplete = append_page(session, data)
+    if incomplete then
+      notify_error(incomplete)
       return
     end
-    session.cursor_id = data.hasMore == true and (data.id or session.cursor_id) or nil
-    session.pages[#session.pages + 1] = data
     render_page(session, #session.pages)
   end)
 end
@@ -309,11 +439,7 @@ local function setup_result_actions(session, buf)
     desc = "Switch the AQL result between JSON and table formats",
   })
   vim.api.nvim_buf_create_user_command(buf, "ArangoAqlExport", function(command_opts)
-    local function export(path)
-      if not path or vim.trim(path) == "" then
-        return
-      end
-      path = vim.trim(path)
+    local function write(path, envelope)
       local overwrite = false
       if result_view.path_exists(path) then
         overwrite = vim.fn.confirm(
@@ -325,19 +451,48 @@ local function setup_result_actions(session, buf)
           return
         end
       end
-      local ok, exported = pcall(result_view.export, session.current_result or {}, path, { overwrite = overwrite })
+      local ok, exported = pcall(result_view.export, envelope, path, { overwrite = overwrite })
       if not ok then
         notify_error(exported, "ArangoDB AQL Export")
         return
       end
       vim.notify("AQL result exported to " .. exported, vim.log.levels.INFO)
     end
+    local function export(path)
+      if not path or vim.trim(path) == "" then
+        return
+      end
+      path = vim.trim(path)
+      -- Decide from what is displayed: session.mode already names a request that may have failed.
+      local shown = session.current_result
+      local rows = shown and (shown.mode == "execute" or shown.mode == "profile")
+      if not command_opts.bang or not rows then
+        write(path, shown or {})
+        return
+      end
+      if session.request then
+        notify_busy()
+        return
+      end
+      fetch_pages(session, function(err)
+        if err then
+          notify_error(err, "ArangoDB AQL Export")
+          return
+        end
+        write(path, all_pages_envelope(session))
+      end)
+    end
     if command_opts.args ~= "" then
       export(command_opts.args)
     else
       vim.ui.input({ prompt = "Export result (.json, .csv, .md): " }, export)
     end
-  end, { nargs = "?", complete = "file", desc = "Export the current AQL result page" })
+  end, {
+    nargs = "?",
+    complete = "file",
+    bang = true,
+    desc = "Export the current AQL result page, or every page with a bang",
+  })
   local maps = keymaps()
   set_local_keymap(buf, "n", maps.next_page, function()
     next_page(session)
@@ -436,77 +591,92 @@ local function write_collections(plan)
   return names
 end
 
-local function execute_after_explain(session, query, bind_vars, profile, explanation)
-  local plan = explanation.plan or {}
-  local modification = plan.isModificationQuery == true
-  if modification then
-    local collections = write_collections(plan)
-    local target = #collections > 0 and ("\nCollections: " .. table.concat(collections, ", ")) or ""
-    local answer = vim.fn.confirm(
-      string.format("Execute a data-modifying AQL query in %s?%s", session.config.database, target),
-      "&Execute\n&Cancel",
-      2
-    )
-    if answer ~= 1 then
-      return
+-- Report whether the query text may modify data; whole words, case-insensitive.
+local function may_modify(query)
+  local lowered = query:lower()
+  for _, keyword in ipairs(modification_keywords) do
+    if lowered:find("%f[%w_]" .. keyword .. "%f[^%w_]") then
+      return true
     end
   end
-
-  history_entry(session, query, bind_vars)
-  session.mode = profile and "profile" or "execute"
-  request(session, function(done)
-    local opts = options()
-    return client.execute_aql_async(session.config, query, bind_vars, {
-      batch_size = opts.batch_size,
-      cursor_ttl = opts.cursor_ttl,
-      max_runtime = opts.max_runtime,
-      profile = profile,
-      modification = modification,
-    }, done)
-  end, function(err, data)
-    if err then
-      notify_error(err)
-      return
-    end
-    if data.hasMore == true and (type(data.id) ~= "string" or data.id == "") then
-      notify_error("ArangoDB returned an incomplete AQL cursor response")
-      return
-    end
-    session.pages = { data }
-    session.page_index = 1
-    session.total_count = data.count
-    session.cursor_id = data.hasMore == true and data.id or nil
-    render_page(session, 1)
-  end)
+  return false
 end
 
-local function execute(session, query, profile)
+local function execute(session, source, profile)
   local ok, bind_vars = pcall(parse_bind_vars, session)
   if not ok then
     notify_error(bind_vars)
     return
   end
-  local query_ok, normalized = pcall(require_query, query)
+  local query_ok, query = pcall(require_query, source)
   if not query_ok then
-    notify_error(normalized)
+    notify_error(query)
     return
   end
+
+  local function run(plan)
+    local modification = type(plan) == "table" and plan.isModificationQuery == true
+    if modification then
+      local collections = write_collections(plan)
+      local target = #collections > 0 and ("\nCollections: " .. table.concat(collections, ", ")) or ""
+      local answer = vim.fn.confirm(
+        string.format("Execute a data-modifying AQL query in %s?%s", session.config.database, target),
+        "&Execute\n&Cancel",
+        2
+      )
+      if answer ~= 1 then
+        return
+      end
+    end
+
+    history_entry(session, query, bind_vars)
+    session.mode = profile and "profile" or "execute"
+    request(session, function(done)
+      local opts = options()
+      return client.execute_aql_async(session.config, query, bind_vars, {
+        batch_size = opts.batch_size,
+        cursor_ttl = opts.cursor_ttl,
+        max_runtime = opts.max_runtime,
+        profile = profile,
+        modification = modification,
+      }, done)
+    end, function(err, data)
+      if err then
+        report_query_error(session, source, err)
+        return
+      end
+      if data.hasMore == true and (type(data.id) ~= "string" or data.id == "") then
+        notify_error("ArangoDB returned an incomplete AQL cursor response")
+        return
+      end
+      session.pages = { data }
+      session.page_index = 1
+      session.total_count = data.count
+      session.cursor_id = data.hasMore == true and data.id or nil
+      render_page(session, 1)
+    end)
+  end
+
   reset_operation(session)
+  if not may_modify(query) then
+    run(nil)
+    return
+  end
   request(session, function(done)
-    return client.explain_aql_async(session.config, normalized, bind_vars, done)
+    return client.explain_aql_async(session.config, query, bind_vars, done)
   end, function(err, explanation)
     if err then
-      notify_error(err)
+      report_query_error(session, source, err)
       return
     end
-    execute_after_explain(session, normalized, bind_vars, profile, explanation)
+    run(explanation.plan)
   end)
 end
 
-local function inspect_query(session, mode, query)
-  local query_ok, normalized = pcall(require_query, query)
+local function inspect_query(session, mode, source)
+  local query_ok, query = pcall(require_query, source)
   if not query_ok then
-    notify_error(normalized)
+    notify_error(query)
     return
   end
   local bind_vars = {}
@@ -521,12 +691,12 @@ local function inspect_query(session, mode, query)
   reset_operation(session)
   request(session, function(done)
     if mode == "validate" then
-      return client.validate_aql_async(session.config, normalized, done)
+      return client.validate_aql_async(session.config, query, done)
     end
-    return client.explain_aql_async(session.config, normalized, bind_vars, done)
+    return client.explain_aql_async(session.config, query, bind_vars, done)
   end, function(err, data)
     if err then
-      notify_error(err)
+      report_query_error(session, source, err)
       return
     end
     session.mode = mode
@@ -670,40 +840,79 @@ local function restore_history(session, entry)
   return true
 end
 
-local function open_history(session)
-  local entries, warning = history.load()
-  if warning then
-    vim.notify(warning, vim.log.levels.WARN, { title = "ArangoDB AQL History" })
-  end
+-- Snacks list shared by AQL history and the named-query library.
+-- `source` supplies entries(), item(entry), restore(entry), delete(entry),
+-- the empty message and labels; confirm_delete, clear and deleted are optional.
+local function saved_query_picker(source)
+  local entries = source.entries()
   if #entries == 0 then
-    vim.notify("AQL history is empty", vim.log.levels.INFO)
+    vim.notify(source.empty, vim.log.levels.INFO)
     return
   end
   local ok, snacks = pcall(require, "snacks")
   if not ok then
-    notify_error("`folke/snacks.nvim` is required to browse AQL history")
+    notify_error("`folke/snacks.nvim` is required to browse " .. source.subject)
     return
   end
+
   local items = {}
-  for _, entry in ipairs(entries) do
-    local first_line = vim.split(entry.query, "\n", { plain = true })[1] or ""
-    items[#items + 1] = {
-      text = string.format("%s  %s  %s", entry.timestamp or "", entry.database or "?", first_line),
-      preview = table.concat({
-        "Connection: " .. tostring(entry.connection or "?"),
-        "Database: " .. tostring(entry.database or "?"),
-        "Timestamp: " .. tostring(entry.timestamp or "?"),
-        "",
-        entry.query,
-        "",
-        "Bind variables",
-        bind_vars_text(entry.bind_vars),
-      }, "\n"),
-      entry = entry,
-    }
+  local function rebuild()
+    items = {}
+    for _, entry in ipairs(entries) do
+      local item = source.item(entry)
+      items[#items + 1] = { text = item.text, preview = item.preview, entry = entry }
+    end
   end
+  rebuild()
+
+  local function selected_entry(item)
+    local selected = item and (item.item or item)
+    return selected and selected.entry
+  end
+
+  local function reload(picker)
+    entries = source.entries()
+    rebuild()
+    if #items == 0 then
+      browser_ui.close_picker(picker)
+      vim.notify(source.empty, vim.log.levels.INFO)
+      return
+    end
+    browser_ui.refresh_picker(picker)
+  end
+
+  local function open_actions(picker, item)
+    if not selected_entry(item) then
+      return
+    end
+    local choices = {
+      { label = source.restore_label, action = "arango_saved_query_restore" },
+      { label = source.delete_label, action = "arango_saved_query_delete" },
+    }
+    if source.clear then
+      choices[#choices + 1] = { label = "Clear history", action = "arango_saved_query_clear" }
+    end
+    vim.schedule(function()
+      vim.ui.select(
+        choices,
+        browser_ui.select_options({
+          prompt = source.title .. " actions",
+          format_item = function(choice)
+            return choice.label
+          end,
+        }),
+        function(choice)
+          if choice and not picker.closed then
+            browser_ui.execute_action(picker, choice.action)
+          end
+        end
+      )
+    end)
+  end
+
+  local maps = picker_keymaps()
   snacks.picker({
-    title = "ArangoDB AQL History",
+    title = source.title,
     finder = function()
       return function(cb)
         for _, item in ipairs(items) do
@@ -714,11 +923,109 @@ local function open_history(session)
     format = "text",
     preview = "preview",
     confirm = function(picker, item)
-      local selected = item and (item.item or item)
-      if selected and selected.entry then
-        picker:close()
-        restore_history(session, selected.entry)
+      local entry = selected_entry(item)
+      if not entry then
+        return
       end
+      picker:close()
+      source.restore(entry)
+    end,
+    actions = {
+      arango_saved_query_actions = function(picker, item)
+        open_actions(picker, item)
+      end,
+      arango_saved_query_restore = function(picker, item)
+        local entry = selected_entry(item)
+        if not entry then
+          return
+        end
+        browser_ui.close_picker(picker)
+        source.restore(entry)
+      end,
+      arango_saved_query_delete = function(picker, item)
+        local entry = selected_entry(item)
+        if not entry or (source.confirm_delete and not source.confirm_delete(entry)) then
+          return
+        end
+        local delete_ok, removed = pcall(source.delete, entry)
+        if not delete_ok then
+          notify_error(removed, source.warning_title)
+          return
+        end
+        if removed then
+          if source.deleted then
+            source.deleted(entry)
+          end
+          reload(picker)
+        end
+      end,
+      arango_saved_query_clear = function(picker)
+        if not source.clear then
+          return
+        end
+        local answer = vim.fn.confirm(string.format("Clear %d AQL history entries?", #entries), "&Clear\n&Cancel", 2)
+        if answer ~= 1 then
+          return
+        end
+        local clear_ok, removed = pcall(source.clear)
+        if not clear_ok then
+          notify_error(removed, source.warning_title)
+          return
+        end
+        if removed and removed > 0 then
+          vim.notify(string.format("Cleared %d AQL history entries", removed), vim.log.levels.INFO)
+        end
+        entries = source.entries()
+        rebuild()
+        browser_ui.close_picker(picker)
+      end,
+    },
+    win = {
+      input = { keys = browser_ui.picker_key(maps.execute, "arango_saved_query_actions", { "n", "i" }, "Actions") },
+      list = { keys = browser_ui.picker_key(maps.execute, "arango_saved_query_actions", { "n" }, "Actions") },
+    },
+  })
+end
+
+local function open_history(session)
+  saved_query_picker({
+    title = "ArangoDB AQL History",
+    subject = "AQL history",
+    warning_title = "ArangoDB AQL History",
+    empty = "AQL history is empty",
+    restore_label = "Restore",
+    delete_label = "Delete entry",
+    entries = function()
+      local entries, warning = history.load()
+      if warning then
+        vim.notify(warning, vim.log.levels.WARN, { title = "ArangoDB AQL History" })
+      end
+      return entries
+    end,
+    item = function(entry)
+      local first_line = vim.split(entry.query, "\n", { plain = true })[1] or ""
+      return {
+        text = string.format("%s  %s  %s", entry.timestamp or "", entry.database or "?", first_line),
+        preview = table.concat({
+          "Connection: " .. tostring(entry.connection or "?"),
+          "Database: " .. tostring(entry.database or "?"),
+          "Timestamp: " .. tostring(entry.timestamp or "?"),
+          "",
+          entry.query,
+          "",
+          "Bind variables",
+          bind_vars_text(entry.bind_vars),
+        }, "\n"),
+      }
+    end,
+    restore = function(entry)
+      restore_history(session, entry)
+    end,
+    delete = function(entry)
+      return history.remove(entry)
+    end,
+    clear = function()
+      return history.clear()
     end,
   })
 end
@@ -763,49 +1070,54 @@ save_named = function(session)
 end
 
 open_library = function(session)
-  local entries, warning = library.load()
-  if warning then
-    vim.notify(warning, vim.log.levels.WARN, { title = "ArangoDB AQL Library" })
-  end
-  entries = vim.tbl_filter(function(entry)
-    return entry.database == session.config.database
-      and (entry.connection == nil or entry.connection == session.connection)
-  end, entries)
-  if #entries == 0 then
-    vim.notify("No named AQL queries for " .. session.config.database, vim.log.levels.INFO)
-    return
-  end
-  vim.ui.select(
-    entries,
-    browser_ui.select_options({
-      prompt = "Named AQL queries (" .. session.config.database .. ")",
-      format_item = function(entry)
-        local first = vim.split(entry.query, "\n", { plain = true })[1] or ""
-        return string.format("%s  %s", entry.name, first)
-      end,
-    }),
-    function(entry)
-      if not entry then
-        return
+  saved_query_picker({
+    title = "Named AQL queries (" .. session.config.database .. ")",
+    subject = "named AQL queries",
+    warning_title = "ArangoDB AQL Library",
+    empty = "No named AQL queries for " .. session.config.database,
+    restore_label = "Load",
+    delete_label = "Delete",
+    entries = function()
+      local entries, warning = library.load()
+      if warning then
+        vim.notify(warning, vim.log.levels.WARN, { title = "ArangoDB AQL Library" })
       end
-      vim.ui.select({ "Load", "Delete" }, browser_ui.select_options({ prompt = entry.name }), function(action)
-        if action == "Load" then
-          if restore_history(session, entry) then
-            session.library_name = entry.name
-          end
-        elseif
-          action == "Delete" and vim.fn.confirm("Delete named query " .. entry.name .. "?", "&No\n&Yes", 1) == 2
-        then
-          local ok, removed = pcall(library.remove, entry)
-          if not ok then
-            notify_error(removed, "ArangoDB AQL Library")
-          elseif removed then
-            vim.notify("Deleted named AQL query: " .. entry.name, vim.log.levels.INFO)
-          end
-        end
-      end)
-    end
-  )
+      return vim.tbl_filter(function(entry)
+        return entry.database == session.config.database
+          and (entry.connection == nil or entry.connection == session.connection)
+      end, entries)
+    end,
+    item = function(entry)
+      local first = vim.split(entry.query, "\n", { plain = true })[1] or ""
+      return {
+        text = string.format("%s  %s", entry.name, first),
+        preview = table.concat({
+          "Name: " .. tostring(entry.name),
+          "Connection: " .. tostring(entry.connection or "?"),
+          "Database: " .. tostring(entry.database or "?"),
+          "",
+          entry.query,
+          "",
+          "Bind variables",
+          bind_vars_text(entry.bind_vars),
+        }, "\n"),
+      }
+    end,
+    restore = function(entry)
+      if restore_history(session, entry) then
+        session.library_name = entry.name
+      end
+    end,
+    confirm_delete = function(entry)
+      return vim.fn.confirm("Delete named query " .. entry.name .. "?", "&No\n&Yes", 1) == 2
+    end,
+    delete = function(entry)
+      return library.remove(entry)
+    end,
+    deleted = function(entry)
+      vim.notify("Deleted named AQL query: " .. entry.name, vim.log.levels.INFO)
+    end,
+  })
 end
 
 local function command_query(session, command_opts)

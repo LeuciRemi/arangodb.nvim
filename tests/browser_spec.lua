@@ -734,7 +734,7 @@ return {
           list_collections_async = function(_, done)
             done(nil, { "items" })
           end,
-          browse_collection_async = function(_, _, _, _, _, _, done)
+          browse_collection_async = function(_, _, _, _, _, _, _, done)
             done(nil, {
               total_count = 1,
               has_more = false,
@@ -969,7 +969,7 @@ return {
     local ok, err = xpcall(function()
       with_picker_harness(function(harness)
         with_browser({
-          browse_collection_async = function(_, _, _, _, _, cursor_id, done)
+          browse_collection_async = function(_, _, _, _, _, cursor_id, _, done)
             calls = calls + 1
             cursors[calls] = cursor_id
             if calls == 1 then
@@ -1114,6 +1114,198 @@ return {
       end)
     end, debug.traceback)
     vim.ui.select = original_select
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("dropping a collection is confirmed before any request and refreshes the list", function()
+    local original_confirm = vim.fn.confirm
+    local confirmations = {}
+    local deleted = 0
+    vim.fn.confirm = function(message, choices, default)
+      confirmations[#confirmations + 1] = { message = message, choices = choices, default = default }
+      return #confirmations == 1 and 2 or 1
+    end
+
+    local ok, err = xpcall(function()
+      with_picker_harness(function(harness)
+        with_browser({
+          delete_collection_async = function(_, collection, done)
+            deleted = deleted + 1
+            vim.schedule(function()
+              done(nil, { name = collection })
+            end)
+            return { cancel = function() end }
+          end,
+        }, function(browser)
+          browser.open({ kind = "collections", config = config })
+          local picker = harness.last()
+
+          picker.opts.actions.arango_drop_collection(picker, { item = { name = "_users" } })
+          h.eq(0, #confirmations)
+          h.eq(0, deleted)
+
+          browser.open_document(config, document())
+          local buf = vim.fn.bufnr("arangodb-buffer://test/items/a")
+          vim.bo[buf].modified = true
+          picker.opts.actions.arango_drop_collection(picker, { item = { name = "items" } })
+          h.eq(0, #confirmations)
+          h.eq(0, deleted)
+          vim.api.nvim_buf_delete(buf, { force = true })
+
+          picker.opts.actions.arango_drop_collection(picker, { item = { name = "items" } })
+          h.eq(1, #confirmations)
+          h.matches("test/items", confirmations[1].message)
+          h.matches("cannot be undone", confirmations[1].message)
+          h.matches("&Cancel", confirmations[1].choices)
+          h.eq(2, confirmations[1].default)
+          h.eq(0, deleted)
+
+          local finds = picker.find_calls
+          picker.opts.actions.arango_drop_collection(picker, { item = { name = "items" } })
+          assert(vim.wait(1000, function()
+            return deleted == 1
+          end))
+          assert(
+            vim.wait(1000, function()
+              return picker.find_calls > finds
+            end),
+            "Dropping a collection did not refresh the collections list"
+          )
+        end)
+      end)
+    end, debug.traceback)
+
+    vim.fn.confirm = original_confirm
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("sorting the document view restarts paging in the chosen order", function()
+    local original_input = vim.ui.input
+    local original_select = vim.ui.select
+    local requests = {}
+    local page = 0
+    vim.ui.input = function(opts, done)
+      h.eq("_key", opts.default)
+      done("created")
+    end
+    vim.ui.select = function(items, _, done)
+      h.eq("Descending", items[2])
+      done("Descending")
+    end
+
+    local ok, err = xpcall(function()
+      with_picker_harness(function(harness)
+        with_browser({
+          browse_collection_async = function(_, _, _, _, _, cursor_id, sort, done)
+            requests[#requests + 1] = { cursor_id = cursor_id, sort = sort }
+            page = page + 1
+            done(nil, {
+              total_count = 3,
+              has_more = page < 3,
+              cursor_id = "cursor-" .. page,
+              items = {
+                {
+                  key = "a",
+                  id = "items/a",
+                  field = "_key",
+                  field_value = "a",
+                  field_value_text = "a",
+                  preview = '{"_id":"items/a","_key":"a"}',
+                },
+              },
+            })
+            return { cancel = function() end }
+          end,
+          close_cursor_async = function() end,
+        }, function(browser)
+          browser.open({ kind = "collection", config = config, collection = "items", field = "_key" })
+          local picker = harness.last()
+          local function ctx()
+            return {
+              filter = { search = "" },
+              async = {
+                aborted = function()
+                  return false
+                end,
+                on = function() end,
+                suspend = function() end,
+                resume = function() end,
+              },
+            }
+          end
+
+          picker.opts.finder(picker, ctx())(function() end)
+          h.eq(nil, requests[1].sort)
+          picker.opts.actions.arango_next_page(picker)
+          picker.opts.finder(picker, ctx())(function() end)
+          h.eq("cursor-1", requests[2].cursor_id)
+
+          picker.opts.actions.arango_sort(picker)
+          h.eq(2, #requests)
+          picker.opts.finder(picker, ctx())(function() end)
+          h.eq(3, #requests)
+          h.eq(nil, requests[3].cursor_id)
+          h.eq("created", requests[3].sort.field)
+          h.eq("DESC", requests[3].sort.direction)
+          h.matches("sort: created DESC", picker.title)
+        end)
+      end)
+    end, debug.traceback)
+
+    vim.ui.input = original_input
+    vim.ui.select = original_select
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("Open in AQL hands the filtered and sorted view to the editor", function()
+    local original_aql = package.loaded["arangodb.aql"]
+    local real_client = require("arangodb.client")
+    local opened
+    package.loaded["arangodb.aql"] = {
+      open = function(opts)
+        opened = opts
+      end,
+    }
+
+    local ok, err = xpcall(function()
+      with_picker_harness(function(harness)
+        with_browser({
+          browse_query = real_client.browse_query,
+        }, function(browser)
+          browser.open({
+            kind = "collection",
+            config = config,
+            collection = "items",
+            field = "name",
+            search = "alp",
+            sort = { field = "created", direction = "DESC" },
+          })
+          local picker = harness.last()
+          picker.opts.actions.arango_open_aql(picker)
+          assert(
+            vim.wait(1000, function()
+              return opened ~= nil
+            end),
+            "Open in AQL did not open the AQL editor"
+          )
+          h.matches("FOR doc IN @@collection", opened.query)
+          h.matches("FILTER CONTAINS", opened.query)
+          h.matches('SORT doc%["created"%] DESC', opened.query)
+          h.eq("items", opened.bind_vars["@collection"])
+          h.eq("alp", opened.bind_vars.search)
+          h.eq(require("arangodb.config").get().page_size, opened.bind_vars.limit)
+          h.matches("LIMIT @limit", opened.query)
+        end)
+      end)
+    end, debug.traceback)
+
+    package.loaded["arangodb.aql"] = original_aql
     if not ok then
       error(err, 0)
     end

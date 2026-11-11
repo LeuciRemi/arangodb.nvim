@@ -187,4 +187,51 @@ return {
       error(err, 0)
     end
   end),
+
+  h.test("the graph header announces a truncated traversal", function()
+    local original_client = package.loaded["arangodb.client"]
+    local original_graph = package.loaded["arangodb.graph"]
+    local truncated = true
+    package.loaded["arangodb.client"] = {
+      list_graphs_async = function(_, done)
+        done(nil, { { name = "social", edgeDefinitions = {} } })
+      end,
+      traverse_graph_async = function(_, _, _, _, done)
+        return async({
+          result = { { vertex = { _id = "users/a", name = "A" }, depth = 0 } },
+          hasMore = false,
+          truncated = truncated,
+        }, done)
+      end,
+      close_cursor_async = function() end,
+    }
+    package.loaded["arangodb.graph"] = nil
+
+    local ok, err = xpcall(function()
+      local graph = require("arangodb.graph")
+      local function open_and_read()
+        graph.open({ config = config, graph = "social", start = "users/a", limit = 1 })
+        local session
+        assert(vim.wait(1000, function()
+          session = graph.session(vim.api.nvim_get_current_buf())
+          return session ~= nil and not session.request
+        end))
+        local text = table.concat(vim.api.nvim_buf_get_lines(session.buf, 0, -1, false), "\n")
+        vim.api.nvim_buf_delete(session.buf, { force = true })
+        return text
+      end
+
+      local text = open_and_read()
+      h.matches("Limit: 1 %(truncated — raise graph%.max_nodes%)", text)
+
+      truncated = false
+      h.eq(nil, open_and_read():find("truncated", 1, true))
+    end, debug.traceback)
+
+    package.loaded["arangodb.graph"] = original_graph
+    package.loaded["arangodb.client"] = original_client
+    if not ok then
+      error(err, 0)
+    end
+  end),
 }

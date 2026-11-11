@@ -10,10 +10,10 @@ integration:
 	$(NVIM) --clean --headless -u tests/minimal_init.lua -l tests/integration.lua
 
 format:
-	stylua lua plugin tests
+	stylua lua plugin tests ftplugin
 
 lint:
-	stylua --check lua plugin tests
+	stylua --check lua plugin tests ftplugin
 	$(MAKE) test
 
 docs:

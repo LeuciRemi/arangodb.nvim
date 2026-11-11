@@ -84,6 +84,10 @@ local function prompt_root(session, default)
 end
 
 local function render(session, data)
+  local limit_line = string.format("Limit: %d", session.limit)
+  if data.truncated == true then
+    limit_line = limit_line .. " (truncated — raise graph.max_nodes)"
+  end
   local lines = {
     string.format("# ArangoDB graph: %s", session.graph.name),
     "",
@@ -91,7 +95,7 @@ local function render(session, data)
     string.format("Start: %s", session.start),
     string.format("Direction: %s", session.direction),
     string.format("Depth: %d", session.depth),
-    string.format("Limit: %d", session.limit),
+    limit_line,
     "",
     "Keys: " .. table.concat(
       vim.tbl_filter(function(value)
@@ -156,9 +160,6 @@ explore = function(session)
     if err then
       notify_error(err)
       return
-    end
-    if data.hasMore == true and data.id then
-      client.close_cursor_async(session.config, data.id)
     end
     render(session, data)
   end)

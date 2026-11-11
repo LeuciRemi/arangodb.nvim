@@ -18,7 +18,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: 2.6.0
-          args: --check lua plugin tests
+          args: --check lua plugin tests ftplugin
 
   test:
     name: Neovim ${{ matrix.neovim }}

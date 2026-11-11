@@ -114,4 +114,34 @@ return {
     pcall(uv.fs_unlink, path)
     config.setup()
   end),
+
+  h.test("AQL history entries can be removed by identity and cleared", function()
+    local config = require("arangodb.config")
+    local path = temporary_path()
+    config.setup({ aql = { history = { path = path } } })
+    package.loaded["arangodb.aql_history"] = nil
+    local history = require("arangodb.aql_history")
+    history.add({ connection = "local", database = "test", query = "RETURN @value", bind_vars = { value = 1 } })
+    history.add({ connection = "local", database = "test", query = "RETURN 2", bind_vars = {} })
+
+    local identity = {
+      connection = "local",
+      database = "test",
+      query = "RETURN @value",
+      bind_vars = { value = 1 },
+    }
+    h.eq(false, history.remove(vim.tbl_extend("force", identity, { bind_vars = { value = 2 } })))
+    h.eq(2, #history.load())
+    h.eq(true, history.remove(identity))
+    local entries = history.load()
+    h.eq(1, #entries)
+    h.eq("RETURN 2", entries[1].query)
+    h.eq(false, history.remove(identity))
+
+    h.eq(1, history.clear())
+    h.eq(0, #history.load())
+    h.eq(0, history.clear())
+    pcall(uv.fs_unlink, path)
+    config.setup()
+  end),
 }

@@ -520,10 +520,27 @@ function M.traverse_graph_async(config, graph, start_vertex, opts, callback)
     "  vertexIds: path.vertices[*]._id",
     "}",
   }, "\n")
-  return M.execute_aql_async(config, query, { start = start_vertex, limit = limit }, {
-    batch_size = limit,
+  return M.execute_aql_async(config, query, { start = start_vertex, limit = limit + 1 }, {
+    batch_size = limit + 1,
     cursor_ttl = 60,
-  }, callback)
+  }, function(err, data)
+    if err then
+      callback(err)
+      return
+    end
+    local truncated = false
+    local result = type(data) == "table" and data.result or nil
+    if type(result) == "table" and #result > limit then
+      truncated = true
+      while #result > limit do
+        result[#result] = nil
+      end
+    end
+    if type(data) == "table" then
+      data.truncated = truncated
+    end
+    callback(nil, data)
+  end)
 end
 
 --- Gather high-level database metrics for the collections overview preview.
@@ -979,6 +996,39 @@ function M.save_document_async(config, document_id, document, opts, callback)
   return task
 end
 
+--- Convert a browse sort choice into an AQL SORT expression.
+local function sort_expression(sort)
+  if type(sort) ~= "table" or type(sort.field) ~= "string" or sort.field == "" then
+    return plugin_options().default_sort or "doc._key ASC"
+  end
+  local direction = tostring(sort.direction or "ASC"):upper() == "DESC" and "DESC" or "ASC"
+  return field_expression(sort.field) .. " " .. direction
+end
+
+--- Build the FOR/FILTER/SORT clauses shared by browse queries and AQL handoff.
+local function browse_query_parts(collection, field, search, sort)
+  local bind_vars = { ["@collection"] = collection }
+  local query_lines = { "FOR doc IN @@collection" }
+  if search ~= "" then
+    bind_vars.search = search:lower()
+    query_lines[#query_lines + 1] =
+      string.format("FILTER CONTAINS(LOWER(TO_STRING(%s)), @search)", field_expression(field))
+  end
+  query_lines[#query_lines + 1] = "SORT " .. sort_expression(sort)
+  return query_lines, bind_vars
+end
+
+--- Build the AQL text and bind variables of a browse view for the AQL editor.
+function M.browse_query(collection, field, search, sort, limit)
+  local query_lines, bind_vars = browse_query_parts(collection, field, search or "", sort)
+  bind_vars.limit = math.max(tonumber(limit) or 50, 1)
+  vim.list_extend(query_lines, {
+    "LIMIT @limit",
+    "RETURN doc",
+  })
+  return { query = table.concat(query_lines, "\n"), bind_vars = bind_vars }
+end
+
 local function cursor_page_async(config, query, bind_vars, limit, cursor_id, callback)
   if cursor_id then
     return database_request_async(config, "PUT", "/_api/cursor/" .. core.url_encode(cursor_id), nil, callback)
@@ -1021,19 +1071,12 @@ local function browse_page(data, config, collection, field, search, limit, relat
 end
 
 --- Browse one cursor-backed collection page without blocking Neovim.
-function M.browse_collection_async(config, collection, field, search, limit, cursor_id, callback)
+function M.browse_collection_async(config, collection, field, search, limit, cursor_id, sort, callback)
   field = field or "_key"
   search = search or ""
   limit = math.max(tonumber(limit) or 50, 1)
 
-  local bind_vars = { ["@collection"] = collection }
-  local query_lines = { "FOR doc IN @@collection" }
-  if search ~= "" then
-    bind_vars.search = search:lower()
-    query_lines[#query_lines + 1] =
-      string.format("FILTER CONTAINS(LOWER(TO_STRING(%s)), @search)", field_expression(field))
-  end
-  query_lines[#query_lines + 1] = "SORT " .. (plugin_options().default_sort or "doc._key ASC")
+  local query_lines, bind_vars = browse_query_parts(collection, field, search, sort)
   query_lines[#query_lines + 1] = "RETURN doc"
 
   return cursor_page_async(config, table.concat(query_lines, "\n"), bind_vars, limit, cursor_id, function(err, data)
@@ -2045,31 +2088,16 @@ function M.browse_related_collection(config, collection, field, value, search, o
 end
 
 --- Browse a collection page and return picker-ready preview items.
-function M.browse_collection(config, collection, field, search, offset, limit)
+function M.browse_collection(config, collection, field, search, offset, limit, sort)
   field = field or "_key"
   search = search or ""
   offset = math.max(tonumber(offset) or 0, 0)
   limit = math.max(tonumber(limit) or 50, 1)
 
-  local expression = field_expression(field)
-  local bind_vars = {
-    ["@collection"] = collection,
-    offset = offset,
-    limit = limit + 1,
-  }
-  local filters = {}
-
-  if search ~= "" then
-    bind_vars.search = search:lower()
-    filters[#filters + 1] = string.format("FILTER CONTAINS(LOWER(TO_STRING(%s)), @search)", expression)
-  end
-
-  local query_lines = {
-    "FOR doc IN @@collection",
-  }
-  vim.list_extend(query_lines, filters)
+  local query_lines, bind_vars = browse_query_parts(collection, field, search, sort)
+  bind_vars.offset = offset
+  bind_vars.limit = limit + 1
   vim.list_extend(query_lines, {
-    "SORT " .. (plugin_options().default_sort or "doc._key ASC"),
     "LIMIT @offset, @limit",
     "RETURN doc",
   })

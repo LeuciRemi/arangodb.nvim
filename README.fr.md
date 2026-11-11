@@ -17,8 +17,9 @@ Enregistré avec un conteneur ArangoDB local et des données fictives. [Reprodui
 
 - Navigation et recherche dans les bases, collections et documents avec `snacks.nvim`.
 - Édition JSON avec `:write`, gestion des conflits de révision et création de brouillons.
-- Administration des collections, schémas, propriétés et index.
-- Écriture, validation, explication, profilage et sauvegarde AQL ; export des résultats.
+- Administration des collections, schémas, propriétés et index, y compris la suppression d’une collection.
+- Écriture, validation, explication, profilage et sauvegarde AQL ; export de la page affichée ou de tout le curseur.
+- Complétion des mots-clés, fonctions et collections AQL ; les erreurs de syntaxe apparaissent comme diagnostics.
 - Navigation entre documents liés et exploration des graphes nommés.
 - Connexions HTTP ou HTTPS, avec résolution différée des mots de passe.
 
@@ -77,7 +78,7 @@ require("arangodb").setup({
 })
 ```
 
-Les majuscules distinguent ces raccourcis globaux des raccourcis locaux AQL. `page_size` contrôle les pages du navigateur, `aql.batch_size` celles de l’éditeur AQL et `aql_batch_size` les lots des autres opérations du client.
+Les majuscules distinguent ces raccourcis globaux des raccourcis locaux AQL. `page_size` contrôle les pages du navigateur, `aql.batch_size` celles de l’éditeur AQL et `aql_batch_size` les lots des autres opérations du client. Les touches optionnelles `picker_keymaps.drop_collection`, `picker_keymaps.sort` et `picker_keymaps.open_aql` sont désactivées par défaut ; les actions restent accessibles par `<C-x>`.
 
 </details>
 
@@ -119,7 +120,7 @@ Pour les callbacks, commandes de mot de passe et variables de découverte, consu
 | `:ArangoResume` / `:ArangoBack` | Reprendre la navigation (en rouvrant la dernière vue collections ou collection si le picker a été fermé) / revenir en arrière |
 | `:ArangoAql [base]` | Ouvrir un éditeur AQL |
 | `:ArangoAqlAttach [base]` | Ajouter les outils AQL à un fichier `.aql` existant |
-| `:ArangoAqlLibrary [base]` | Parcourir les requêtes sauvegardées |
+| `:ArangoAqlLibrary [base]` | Rechercher et charger les requêtes sauvegardées dans un picker |
 | `:ArangoGraph [base]` | Explorer un graphe nommé |
 
 Les arguments de base sont complétés à partir des connexions configurées et des noms de bases découverts plus tôt dans la session. La complétion n’interroge jamais le serveur.
@@ -128,11 +129,13 @@ Dans un document, `:write` sauvegarde dans ArangoDB. `:ArangoDocumentDuplicate`,
 
 Les modifications faites pendant une suppression ou un vidage de collection sont conservées dans un buffer de récupération. Utilisez `:write <fichier>` pour enregistrer une copie locale ou `:ArangoDocumentDuplicate` pour récupérer son contenu dans un nouveau brouillon.
 
-Une requête AQL s’ouvre avec un buffer JSON pour ses variables. Les commandes et raccourcis normaux fonctionnent dans les deux buffers ; les sélections visuelles concernent uniquement la requête. L’exécution et le profilage demandent confirmation avant une mutation ; la validation et l’explication n’exécutent rien.
+Une requête AQL s’ouvre avec un buffer JSON pour ses variables. Les commandes et raccourcis normaux fonctionnent dans les deux buffers ; les sélections visuelles concernent uniquement la requête. `:ArangoAqlExecute` et `:ArangoAqlProfile` n’envoient la requête d’explication et ne demandent confirmation que si la requête contient `INSERT`, `UPDATE`, `REPLACE`, `REMOVE` ou `UPSERT` (quelle que soit la casse) ; les autres requêtes s’exécutent directement. La validation et l’explication n’exécutent jamais la requête.
+
+Les buffers AQL complètent les mots-clés (`k`), les fonctions intégrées d’ArangoDB 3.12 (`f`, insérées sans parenthèses) et les collections de la base de la session (`c`) via `omnifunc`. Les collections se chargent en arrière-plan : la première complétion peut ne proposer que les mots-clés et les fonctions. Les commentaires utilisent `//`. Une erreur de syntaxe signalée par le serveur devient un diagnostic `ERROR` à la position indiquée dans le buffer de requête ; il est effacé à la requête suivante ou après un succès. Ces diagnostics Neovim sont indépendants du journal `diagnostics` des requêtes.
 
 Charger l’historique ou une requête nommée dans un fichier `.aql` attaché le laisse marqué comme modifié et demande confirmation avant de remplacer des éditions non sauvegardées. Les réponses Explain et Validate restent en JSON lorsque le format tableau est sélectionné.
 
-L’historique et les requêtes nommées sont conservés localement, avec leurs variables. Enregistrer une requête nommée sous un nom existant pour la même connexion et la même base demande confirmation. Un fichier d’historique ou de bibliothèque corrompu est renommé en `<path>.corrupt-<timestamp>` avec un avertissement avant l’écriture d’un nouveau fichier. Pour des requêtes sensibles, désactivez `aql.history.enabled` ou `aql.history.store_bind_vars` et évitez d’enregistrer des valeurs sensibles dans la bibliothèque. [`:help arangodb.nvim-aql`](doc/arangodb.nvim.txt) détaille le stockage, les sessions et les commandes.
+L’historique et les requêtes nommées sont conservés localement, avec leurs variables. Leurs pickers offrent la recherche et un aperçu et nécessitent `snacks.nvim`, sans repli sur `vim.ui.select` ; `<C-x>` ouvre un menu d’actions : Restore, Delete entry et Clear history (avec confirmation) pour l’historique, Load ou Delete (avec confirmation) pour les requêtes nommées. Enregistrer une requête nommée sous un nom existant pour la même connexion et la même base demande confirmation. Un fichier d’historique ou de bibliothèque corrompu est renommé en `<path>.corrupt-<timestamp>` avec un avertissement avant l’écriture d’un nouveau fichier. Pour des requêtes sensibles, désactivez `aql.history.enabled` ou `aql.history.store_bind_vars` et évitez d’enregistrer des valeurs sensibles dans la bibliothèque. [`:help arangodb.nvim-aql`](doc/arangodb.nvim.txt) détaille le stockage, les sessions et les commandes.
 
 Raccourcis par défaut dans les buffers AQL :
 
@@ -164,7 +167,9 @@ Touches par défaut du picker de documents :
 | `<C-x>` | Ouvrir le menu d’actions |
 | `<C-b>` | Revenir en arrière |
 
-La navigation fonctionne en modes normal et insertion. `<C-x>` donne accès à la création, la duplication, aux schémas, aux index et aux actions destructives. Les raccourcis d’écriture configurés explicitement restent limités au mode normal. Les opérations destructives demandent confirmation et des garde-fous protègent les buffers modifiés.
+La navigation fonctionne en modes normal et insertion. `<C-x>` donne accès à la création, la duplication, aux schémas, aux index, à la suppression de collection et aux actions destructives. Les raccourcis d’écriture configurés explicitement restent limités au mode normal. Les opérations destructives demandent confirmation, des garde-fous protègent les buffers modifiés, et la suppression d’une collection refuse les collections système puis demande confirmation en nommant la collection et, lorsqu’il est connu, son nombre de documents. `picker_keymaps.drop_collection` ajoute une touche dédiée.
+
+Dans une vue de collection, le menu d’actions propose aussi *Sort by field…* (chemin d’attribut, puis Ascending, Descending ou Default order) et *Open in AQL* (ouvre l’éditeur AQL pré-rempli avec la requête équivalente et ses variables). Le tri apparaît dans le titre et est conservé entre les pages, `:ArangoBack` et `:ArangoResume` ; le changer repart de la page 1. Ces entrées n’existent que dans les vues de collection, pas dans les vues de relations. `picker_keymaps.sort` et `picker_keymaps.open_aql` ajoutent une touche dédiée ; ils sont désactivés par défaut.
 
 ArangoDB applique les permissions : accès en lecture pour les consultations, en écriture pour les mutations et privilèges correspondants pour administrer collections et index. [`:help arangodb.nvim-development`](doc/arangodb.nvim.txt) détaille les permissions et les limites de duplication.
 
@@ -200,11 +205,11 @@ Après initialisation des données, le tableau `result` contient :
 ]
 ```
 
-Le GIF remplace d’abord le rôle d’Alice par `Maintainer` : la requête affiche donc cette valeur sauvegardée. Dans le buffer de résultat, utilisez `:ArangoAqlResultFormat table` pour une vue compacte ou `:ArangoAqlExport /tmp/active-users.csv` pour exporter **la page courante**. L’export ne récupère pas les pages restantes du curseur.
+Le GIF remplace d’abord le rôle d’Alice par `Maintainer` : la requête affiche donc cette valeur sauvegardée. Dans le buffer de résultat, `:ArangoAqlResultFormat table` donne une vue compacte. `:ArangoAqlExport /tmp/active-users.csv` exporte la page affichée ; `:ArangoAqlExport!` récupère d’abord les pages restantes du curseur et exporte toutes les lignes dans l’ordre. Cet export est asynchrone, s’annule avec `:ArangoAqlCancel`, laisse la page affichée inchangée et n’écrit aucun fichier si une page échoue.
 
 ## Explorateur de graphes
 
-Lancez `:ArangoGraph [base]` et choisissez un graphe et un document de départ, ou utilisez `:ArangoDocumentGraph` depuis un document. L’exploration est bornée en profondeur et en nombre de sommets. Voir [`:help arangodb.nvim-graph`](doc/arangodb.nvim.txt) pour les touches et limites.
+Lancez `:ArangoGraph [base]` et choisissez un graphe et un document de départ, ou utilisez `:ArangoDocumentGraph` depuis un document. L’exploration est bornée en profondeur et en nombre de sommets ; lorsque le graphe contient plus de sommets que `graph.max_nodes`, l’en-tête affiche `Limit: N (truncated — raise graph.max_nodes)`. Voir [`:help arangodb.nvim-graph`](doc/arangodb.nvim.txt) pour les touches et limites.
 
 ## API Lua
 

@@ -252,7 +252,7 @@ return {
       })
     end, function(client)
       local first
-      client.browse_collection_async(config, "items", "_key", "", 2, nil, function(err, data)
+      client.browse_collection_async(config, "items", "_key", "", 2, nil, nil, function(err, data)
         assert(not err, tostring(err))
         first = data
       end)
@@ -264,7 +264,7 @@ return {
       h.eq("cursor-1", first.cursor_id)
 
       local second
-      client.browse_collection_async(config, "items", "_key", "", 2, first.cursor_id, function(err, data)
+      client.browse_collection_async(config, "items", "_key", "", 2, first.cursor_id, nil, function(err, data)
         assert(not err, tostring(err))
         second = data
       end)
@@ -866,8 +866,66 @@ return {
       end))
       h.matches('0%.%.3 OUTBOUND @start GRAPH "social"', cursor_payload.query)
       h.eq("users/alice", cursor_payload.bindVars.start)
-      h.eq(25, cursor_payload.bindVars.limit)
-      h.eq(25, cursor_payload.batchSize)
+      h.eq(26, cursor_payload.bindVars.limit)
+      h.eq(26, cursor_payload.batchSize)
+    end)
+  end),
+
+  h.test("traversal trims its look-ahead row and reports truncation", function()
+    local row_count = 3
+    local limit_bind
+    with_client(function(opts)
+      local payload = vim.json.decode(opts.body)
+      limit_bind = payload.bindVars.limit
+      local result = {}
+      for index = 1, row_count do
+        result[#result + 1] = { vertex = { _id = "users/" .. index }, depth = 0 }
+      end
+      return json_response({ result = result, hasMore = false })
+    end, function(client)
+      local function traverse()
+        local result
+        client.traverse_graph_async(config, "social", "users/1", { limit = 2 }, function(err, value)
+          assert(not err, tostring(err))
+          result = value
+        end)
+        assert(vim.wait(1000, function()
+          return result ~= nil
+        end))
+        return result
+      end
+
+      local truncated = traverse()
+      h.eq(3, limit_bind)
+      h.eq(2, #truncated.result)
+      h.eq(true, truncated.truncated)
+
+      row_count = 2
+      local complete = traverse()
+      h.eq(3, limit_bind)
+      h.eq(2, #complete.result)
+      h.eq(false, complete.truncated)
+    end)
+  end),
+
+  h.test("browse views hand an equivalent AQL query to the editor", function()
+    with_client(function()
+      error("browse_query must not send a request")
+    end, function(client)
+      local view = client.browse_query("items", "_key", "Alp", { field = "created", direction = "DESC" }, 25)
+      h.matches("FOR doc IN @@collection", view.query)
+      h.matches('FILTER CONTAINS%(LOWER%(TO_STRING%(doc%["_key"%]%)%), @search%)', view.query)
+      h.matches('SORT doc%["created"%] DESC', view.query)
+      h.matches("LIMIT @limit", view.query)
+      h.matches("RETURN doc$", view.query)
+      h.eq("items", view.bind_vars["@collection"])
+      h.eq("alp", view.bind_vars.search)
+      h.eq(25, view.bind_vars.limit)
+
+      local plain = client.browse_query("items", "_key", "", nil, 10)
+      h.eq(nil, plain.bind_vars.search)
+      h.matches("SORT doc%.%_key ASC", plain.query)
+      h.eq(10, plain.bind_vars.limit)
     end)
   end),
 }

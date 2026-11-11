@@ -21,6 +21,13 @@ local function async(value, done)
   }
 end
 
+local function async_error(err, done)
+  vim.schedule(function()
+    done(err)
+  end)
+  return { cancel = function() end }
+end
+
 local function listed_unnamed_buffers()
   local count = 0
   for _, buf in ipairs(vim.api.nvim_list_bufs()) do
@@ -81,7 +88,6 @@ local function with_saved_query_picker(entry, callback)
   local original_history_load = history.load
   local original_library_load = library.load
   local original_snacks = package.loaded["snacks"]
-  local original_select = vim.ui.select
   local original_confirm = vim.fn.confirm
   local confirmation = { answer = 2, prompts = {} }
   history.load = function()
@@ -97,9 +103,6 @@ local function with_saved_query_picker(entry, callback)
       opts.confirm({ close = function() end }, selected)
     end,
   }
-  vim.ui.select = function(items, _, done)
-    done(items[1])
-  end
   vim.fn.confirm = function(message, _, default)
     confirmation.prompts[#confirmation.prompts + 1] = message
     h.eq(2, default)
@@ -112,7 +115,6 @@ local function with_saved_query_picker(entry, callback)
   history.load = original_history_load
   library.load = original_library_load
   package.loaded["snacks"] = original_snacks
-  vim.ui.select = original_select
   vim.fn.confirm = original_confirm
   if not ok then
     error(err, 0)
@@ -724,6 +726,237 @@ return {
       )
     end, debug.traceback)
     vim.notify = original_notify
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("positioned AQL errors mark the query buffer and successful runs clear the mark", function()
+    local attempts = 0
+    with_aql(
+      base_client({
+        execute_aql_async = function(_, _, _, _, done)
+          attempts = attempts + 1
+          if attempts == 1 then
+            return async_error(
+              "AQL: syntax error, unexpected identifier near 'RETURNX' at position 1:8 (while parsing)",
+              done
+            )
+          end
+          return async({ result = { 1 }, count = 1, hasMore = false }, done)
+        end,
+      }),
+      function(aql)
+        local session = aql.open({ config = config, query = "  FOR d IN c\n  RETURNX d" })
+        vim.api.nvim_buf_call(session.query_buf, function()
+          vim.cmd("ArangoAqlExecute")
+        end)
+        assert(vim.wait(1000, function()
+          return #vim.diagnostic.get(session.query_buf) == 1
+        end))
+        local diagnostic = vim.diagnostic.get(session.query_buf)[1]
+        h.eq(0, diagnostic.lnum)
+        h.eq(9, diagnostic.col)
+        h.eq(vim.diagnostic.severity.ERROR, diagnostic.severity)
+        h.matches("unexpected identifier", diagnostic.message)
+
+        vim.api.nvim_buf_call(session.query_buf, function()
+          vim.cmd("ArangoAqlExecute")
+        end)
+        assert(vim.wait(1000, function()
+          return session.result_buf ~= nil
+        end))
+        h.eq(0, #vim.diagnostic.get(session.query_buf))
+      end
+    )
+  end),
+
+  h.test("positioned AQL errors from a later selection land on the selected line", function()
+    with_aql(
+      base_client({
+        execute_aql_async = function(_, _, _, _, done)
+          return async_error(
+            "AQL: syntax error, unexpected identifier near 'RETURNX' at position 1:12 (while parsing)",
+            done
+          )
+        end,
+      }),
+      function(aql)
+        require("arangodb.config").setup({
+          aql = { history = { enabled = false } },
+          aql_keymaps = { execute = "zq" },
+        })
+        local session = aql.open({ config = config, query = "RETURN 0\n  FOR d IN c RETURNX" })
+        vim.api.nvim_set_current_win(vim.fn.win_findbuf(session.query_buf)[1])
+        vim.api.nvim_win_set_cursor(0, { 2, 2 })
+        vim.api.nvim_feedkeys("v$zq", "x", false)
+        assert(vim.wait(1000, function()
+          return #vim.diagnostic.get(session.query_buf) == 1
+        end))
+        local diagnostic = vim.diagnostic.get(session.query_buf)[1]
+        h.eq(1, diagnostic.lnum)
+        h.eq(13, diagnostic.col)
+      end
+    )
+  end),
+
+  h.test("AQL export with a bang writes the rows of every cursor page", function()
+    local pages = {
+      { result = { { value = 1 } }, hasMore = true, id = "cursor-1" },
+      { result = { { value = 2 } }, hasMore = true, id = "cursor-2" },
+      { result = { { value = 3 } }, hasMore = false },
+    }
+    local fetches = 0
+    with_aql(
+      base_client({
+        execute_aql_async = function(_, _, _, _, done)
+          return async(pages[1], done)
+        end,
+        next_aql_page_async = function(_, cursor_id, done)
+          fetches = fetches + 1
+          local page = pages[fetches + 1]
+          h.eq(fetches == 1 and "cursor-1" or "cursor-2", cursor_id)
+          return async(page, done)
+        end,
+      }),
+      function(aql)
+        local session = aql.open({ config = config, query = "FOR value IN 1..3 RETURN value" })
+        vim.api.nvim_buf_call(session.query_buf, function()
+          vim.cmd("ArangoAqlExecute")
+        end)
+        assert(vim.wait(1000, function()
+          return session.result_buf ~= nil
+        end))
+        local path = vim.fn.tempname() .. ".json"
+        vim.api.nvim_buf_call(session.result_buf, function()
+          vim.cmd("ArangoAqlExport! " .. vim.fn.fnameescape(path))
+        end)
+        assert(vim.wait(1000, function()
+          return vim.fn.filereadable(path) == 1
+        end))
+        local rows = vim.json.decode(table.concat(vim.fn.readfile(path), "\n"))
+        h.eq({ { value = 1 }, { value = 2 }, { value = 3 } }, rows)
+        h.eq(2, fetches)
+        h.eq(3, #session.pages)
+        h.eq(1, session.page_index)
+        h.eq(nil, session.cursor_id)
+        vim.fn.delete(path)
+      end
+    )
+  end),
+
+  h.test("a failed AQL page fetch writes no partial export", function()
+    local notifications = {}
+    local original_notify = vim.notify
+    local ok, err = xpcall(function()
+      with_aql(
+        base_client({
+          execute_aql_async = function(_, _, _, _, done)
+            return async({ result = { { value = 1 } }, hasMore = true, id = "cursor-1" }, done)
+          end,
+          next_aql_page_async = function(_, _, done)
+            return async_error("AQL cursor is gone", done)
+          end,
+        }),
+        function(aql)
+          vim.notify = function(message)
+            notifications[#notifications + 1] = tostring(message)
+          end
+          local session = aql.open({ config = config, query = "FOR value IN 1..2 RETURN value" })
+          vim.api.nvim_buf_call(session.query_buf, function()
+            vim.cmd("ArangoAqlExecute")
+          end)
+          assert(vim.wait(1000, function()
+            return session.result_buf ~= nil
+          end))
+          local path = vim.fn.tempname() .. ".json"
+          vim.api.nvim_buf_call(session.result_buf, function()
+            vim.cmd("ArangoAqlExport! " .. vim.fn.fnameescape(path))
+          end)
+          assert(vim.wait(1000, function()
+            return session.request == nil and #notifications > 0
+          end))
+          h.eq(true, vim.tbl_contains(notifications, "AQL cursor is gone"))
+          h.eq(0, vim.fn.filereadable(path))
+        end
+      )
+    end, debug.traceback)
+    vim.notify = original_notify
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("read AQL queries skip the explain round trip", function()
+    local explains = 0
+    local executions = 0
+    with_aql(
+      base_client({
+        explain_aql_async = function(_, _, _, done)
+          explains = explains + 1
+          return async({ plan = { isModificationQuery = false } }, done)
+        end,
+        execute_aql_async = function(_, _, _, _, done)
+          executions = executions + 1
+          return async({ result = { 1 }, count = 1, hasMore = false }, done)
+        end,
+      }),
+      function(aql)
+        local queries = { "FOR d IN c RETURN d", "FOR d IN c FILTER d.removed_at == null RETURN d" }
+        for index, query in ipairs(queries) do
+          local session = aql.open({ config = config, query = query })
+          vim.api.nvim_buf_call(session.query_buf, function()
+            vim.cmd("ArangoAqlExecute")
+          end)
+          assert(vim.wait(1000, function()
+            return session.current_result ~= nil and session.current_result.mode == "execute"
+          end))
+          h.eq(0, explains)
+          h.eq(index, executions)
+        end
+      end
+    )
+  end),
+
+  h.test("data-modifying AQL queries still explain and ask before executing", function()
+    local explains = 0
+    local executions = 0
+    local prompts = {}
+    local original_confirm = vim.fn.confirm
+    local ok, err = xpcall(function()
+      with_aql(
+        base_client({
+          explain_aql_async = function(_, _, _, done)
+            explains = explains + 1
+            return async({ plan = { isModificationQuery = true, collections = {} } }, done)
+          end,
+          execute_aql_async = function(_, _, _, _, done)
+            executions = executions + 1
+            return async({ result = {}, hasMore = false }, done)
+          end,
+        }),
+        function(aql)
+          vim.fn.confirm = function(message)
+            prompts[#prompts + 1] = message
+            return 2
+          end
+          local queries = { "FOR d IN c REMOVE d IN c", "FOR d IN c remove d IN c" }
+          for index, query in ipairs(queries) do
+            local session = aql.open({ config = config, query = query })
+            vim.api.nvim_buf_call(session.query_buf, function()
+              vim.cmd("ArangoAqlExecute")
+            end)
+            assert(vim.wait(1000, function()
+              return #prompts == index
+            end))
+          end
+          h.eq(2, explains)
+          h.eq(0, executions)
+          h.eq(2, #prompts)
+        end
+      )
+    end, debug.traceback)
+    vim.fn.confirm = original_confirm
     if not ok then
       error(err, 0)
     end

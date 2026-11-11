@@ -229,9 +229,10 @@ local function title(database, collection, field, meta)
     #state.history > 0 and key_label(keymaps.back) and (keymaps.back .. " back") or nil,
   })
   local field_text = field_label(field)
+  local sort_text = meta.sort and string.format("  sort: %s %s", meta.sort.field, meta.sort.direction) or ""
   if meta.total_count ~= nil and (meta.search == nil or meta.search == "") then
     return string.format(
-      "Arango %s/%s - %s (%d-%d/%d)%s%s",
+      "Arango %s/%s - %s (%d-%d/%d)%s%s%s",
       database,
       collection,
       field_text,
@@ -239,18 +240,20 @@ local function title(database, collection, field, meta)
       last,
       meta.total_count,
       meta.has_more and "+" or "",
+      sort_text,
       hint
     )
   end
 
   return string.format(
-    "Arango %s/%s - %s (%d-%d)%s%s",
+    "Arango %s/%s - %s (%d-%d)%s%s%s",
     database,
     collection,
     field_text,
     first,
     last,
     meta.has_more and "+" or "",
+    sort_text,
     hint
   )
 end
@@ -641,6 +644,71 @@ local function truncate_collection_with_prompt(config, collection, callback, pic
       end
     end, function(err)
       arango.notify_error(err, "ArangoDB Truncate Collection")
+      restore_picker_input_focus(picker)
+    end)
+  end, picker)
+end
+
+local function confirm_drop_collection(config, collection, count, callback, picker)
+  local documents = type(count) == "number" and string.format("\nIt holds %d documents.", count) or ""
+  if
+    vim.fn.confirm(
+      string.format(
+        "Permanently drop collection %s/%s?%s\nThis cannot be undone.",
+        config.database,
+        collection,
+        documents
+      ),
+      "&Drop\n&Cancel",
+      2
+    ) ~= 1
+  then
+    restore_picker_input_focus(picker)
+    return
+  end
+
+  if callback then
+    callback()
+  end
+  restore_picker_input_focus(picker)
+end
+
+local function drop_collection_with_prompt(config, collection, count, callback, picker)
+  if collection:sub(1, 1) == "_" then
+    vim.notify(
+      string.format("ArangoDB system collection %s cannot be dropped", collection),
+      vim.log.levels.WARN,
+      { title = "ArangoDB Drop Collection" }
+    )
+    restore_picker_input_focus(picker)
+    return
+  end
+
+  if
+    not ensure_unmodified_document_buffers({
+      config = config,
+      database = config.database,
+      collection = collection,
+    }, "dropping this collection")
+  then
+    restore_picker_input_focus(picker)
+    return
+  end
+
+  confirm_drop_collection(config, collection, count, function()
+    picker_request(picker, "ArangoDB Drop Collection", function(done)
+      return client.delete_collection_async(config, collection, done)
+    end, function(result)
+      close_document_buffers({
+        config = config,
+        database = config.database,
+        collection = collection,
+      })
+      if callback then
+        callback(result)
+      end
+    end, function(err)
+      arango.notify_error(err, "ArangoDB Drop Collection")
       restore_picker_input_focus(picker)
     end)
   end, picker)
@@ -1434,6 +1502,7 @@ local function open_route(route, prev_picker, on_error)
     kind = route.kind or "collection",
     title = route.title,
     offset = route.offset,
+    sort = route.sort,
   }, prev_picker)
 end
 
@@ -2168,6 +2237,10 @@ browse_collections = function(config, opts, prev_picker)
         { label = action_label("Rename collection", keymaps.rename), action = "arango_rename_collection" }
       choices[#choices + 1] =
         { label = action_label("Truncate collection", keymaps.truncate), action = "arango_truncate_collection" }
+      choices[#choices + 1] = {
+        label = action_label("Drop collection", keymaps.drop_collection),
+        action = "arango_drop_collection",
+      }
       choices[#choices + 1] = { label = "Manage indexes", action = "arango_manage_indexes" }
       choices[#choices + 1] = {
         label = "Edit properties and schema",
@@ -2347,6 +2420,20 @@ browse_collections = function(config, opts, prev_picker)
           vim.notify(string.format("Collection %s truncated", collection), vim.log.levels.INFO)
         end, current)
       end,
+      arango_drop_collection = function(current, item)
+        local collection = selected_collection(current, item)
+        if not collection then
+          vim.notify("Select a collection first", vim.log.levels.INFO)
+          return
+        end
+
+        local details = meta.collection_lookup[collection]
+        drop_collection_with_prompt(config, collection, details and details.count, function()
+          clear_collection_overview()
+          refresh_picker(current)
+          vim.notify(string.format("Collection %s dropped", collection), vim.log.levels.INFO)
+        end, current)
+      end,
       arango_manage_indexes = function(current, item)
         local collection = selected_collection(current, item)
         if not collection then
@@ -2392,6 +2479,7 @@ browse_collections = function(config, opts, prev_picker)
           picker_key(keymaps.duplicate_collection, "arango_duplicate_collection", { "n" }, "Duplicate Collection"),
           picker_key(keymaps.rename, "arango_rename_collection", { "n" }, "Rename Collection"),
           picker_key(keymaps.truncate, "arango_truncate_collection", { "n" }, "Truncate Collection"),
+          picker_key(keymaps.drop_collection, "arango_drop_collection", { "n" }, "Drop Collection"),
           picker_key(keymaps.back, "arango_pick_database", { "n", "i" }, "Choose Database", opts.allow_database_back)
         ),
       },
@@ -2403,6 +2491,7 @@ browse_collections = function(config, opts, prev_picker)
           picker_key(keymaps.duplicate_collection, "arango_duplicate_collection", { "n" }, "Duplicate Collection"),
           picker_key(keymaps.rename, "arango_rename_collection", { "n" }, "Rename Collection"),
           picker_key(keymaps.truncate, "arango_truncate_collection", { "n" }, "Truncate Collection"),
+          picker_key(keymaps.drop_collection, "arango_drop_collection", { "n" }, "Drop Collection"),
           picker_key(keymaps.back, "arango_pick_database", { "n" }, "Choose Database", opts.allow_database_back)
         ),
       },
@@ -2434,6 +2523,7 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
     offset = initial_offset,
     limit = page_size,
     search = initial_search or "",
+    sort = type(opts.sort) == "table" and vim.deepcopy(opts.sort) or nil,
     items = {},
     total_count = nil,
     has_more = false,
@@ -2451,6 +2541,7 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
       collection = collection,
       field = meta.field,
       search = meta.search,
+      sort = meta.sort and vim.deepcopy(meta.sort) or nil,
       offset = meta.offset,
       values = opts.values,
       prompt = opts.prompt,
@@ -2499,6 +2590,8 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
     if route_kind ~= "related" then
       choices[#choices + 1] =
         { label = action_label("Change filter field", keymaps.change_field), action = "arango_change_field" }
+      choices[#choices + 1] = { label = action_label("Sort by field…", keymaps.sort), action = "arango_sort" }
+      choices[#choices + 1] = { label = action_label("Open in AQL", keymaps.open_aql), action = "arango_open_aql" }
     end
     if meta.search ~= "" then
       choices[#choices + 1] = { label = action_label("Reset search", keymaps.reset), action = "arango_reset_search" }
@@ -2560,6 +2653,53 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
     meta.has_more = false
   end
 
+  local function apply_sort(current, sort)
+    meta.sort = sort
+    invalidate_pages(1)
+    state.last_route = current_route()
+    update_picker_title(current, meta)
+    current:find({ refresh = true })
+    restore_picker_input_focus(current)
+  end
+
+  local function choose_sort_direction(current, path)
+    vim.ui.select(
+      { "Ascending", "Descending", "Default order" },
+      picker_select_options({
+        prompt = string.format("Sort direction for %s", path),
+      }),
+      function(choice)
+        if not choice or not current or current.closed then
+          restore_picker_input_focus(current)
+          return
+        end
+        if choice == "Default order" then
+          apply_sort(current, nil)
+        else
+          apply_sort(current, { field = path, direction = choice == "Descending" and "DESC" or "ASC" })
+        end
+      end
+    )
+  end
+
+  local function choose_sort(current)
+    local default = (meta.sort and meta.sort.field) or (type(meta.field) == "string" and meta.field) or "_key"
+    vim.ui.input({ prompt = "Sort field: ", default = default }, function(value)
+      local path = type(value) == "string" and vim.trim(value) or ""
+      if path == "" then
+        restore_picker_input_focus(current)
+        return
+      end
+      local valid = pcall(utils.field_path_segments, path)
+      if not valid then
+        arango.notify_error(string.format("Invalid sort field path: %s", path), "ArangoDB Sort")
+        restore_picker_input_focus(current)
+        return
+      end
+      choose_sort_direction(current, path)
+    end)
+  end
+
   local function format_page(data, index)
     meta.offset = (index - 1) * meta.limit
     meta.total_count = data.total_count or meta.total_count
@@ -2591,7 +2731,7 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
           done
         )
       end
-      return client.browse_collection_async(config, collection, field, search, meta.limit, cursor_id, done)
+      return client.browse_collection_async(config, collection, field, search, meta.limit, cursor_id, meta.sort, done)
     end)
   end
 
@@ -2764,6 +2904,19 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
         current.input:set(nil, "")
         current:find({ refresh = true })
       end,
+      arango_sort = function(current)
+        choose_sort(current)
+      end,
+      arango_open_aql = function(current)
+        local view = client.browse_query(collection, meta.field, meta.search, meta.sort, meta.limit)
+        close_picker_then(current, function()
+          require("arangodb.aql").open({
+            config = config,
+            query = view.query,
+            bind_vars = view.bind_vars,
+          })
+        end)
+      end,
       arango_open_related = function(current, item)
         local selected = picker_current_item(current, item)
         if not selected or not selected.item then
@@ -2847,6 +3000,8 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
             "Change Filter Field",
             route_kind ~= "related"
           ),
+          picker_key(keymaps.sort, "arango_sort", { "n", "i" }, "Sort By Field", route_kind ~= "related"),
+          picker_key(keymaps.open_aql, "arango_open_aql", { "n" }, "Open in AQL", route_kind ~= "related"),
           picker_key(keymaps.reset, "arango_reset_search", { "n", "i" }, "Reset Search"),
           picker_key(keymaps.related, "arango_open_related", { "n", "i" }, "Open Related"),
           picker_key(keymaps.delete, "arango_delete_document", { "n" }, "Delete Document"),
@@ -2868,6 +3023,8 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
             "Change Filter Field",
             route_kind ~= "related"
           ),
+          picker_key(keymaps.sort, "arango_sort", { "n" }, "Sort By Field", route_kind ~= "related"),
+          picker_key(keymaps.open_aql, "arango_open_aql", { "n" }, "Open in AQL", route_kind ~= "related"),
           picker_key(keymaps.reset, "arango_reset_search", { "n" }, "Reset Search"),
           picker_key(keymaps.related, "arango_open_related", { "n" }, "Open Related"),
           picker_key(keymaps.delete, "arango_delete_document", { "n" }, "Delete Document"),

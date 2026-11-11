@@ -17,8 +17,9 @@ Recorded with a local ArangoDB container and fictional data. [Reproduce the demo
 
 - Browse and search databases, collections, and documents with `snacks.nvim`.
 - Edit JSON with `:write`, handle revision conflicts, and create document drafts.
-- Manage collections, schemas, properties, and indexes.
-- Write, validate, explain, profile, and save AQL queries; export result pages.
+- Manage collections, schemas, properties, and indexes, including dropping collections.
+- Write, validate, explain, profile, and save AQL queries; export the displayed page or the whole cursor.
+- Complete AQL keywords, functions, and collections; syntax errors appear as diagnostics.
 - Follow inferred document relations and explore named graphs.
 - Connect over HTTP or HTTPS, with optional password providers.
 
@@ -113,7 +114,10 @@ require("arangodb").setup({
     delete = false,
     duplicate = false,
     truncate = false,
+    drop_collection = false,
     rename = false,
+    sort = false,
+    open_aql = false,
   },
   document_keymaps = {
     save = nil,
@@ -244,7 +248,7 @@ For password callbacks, external commands, and server discovery variables, see [
 | `:ArangoResume` / `:ArangoBack` | Resume browsing (reopening the last collections or collection view if the picker was closed) / go back |
 | `:ArangoAql [database]` | Open an AQL editor |
 | `:ArangoAqlAttach [database]` | Attach AQL tooling to an existing `.aql` file |
-| `:ArangoAqlLibrary [database]` | Browse saved queries |
+| `:ArangoAqlLibrary [database]` | Search and load saved queries in a picker |
 | `:ArangoGraph [database]` | Explore a named graph |
 
 Database arguments complete from your configured connections and from database names discovered earlier in this session. Completion never contacts the server.
@@ -253,11 +257,13 @@ In a document buffer, `:write` saves to ArangoDB. `:ArangoDocumentDuplicate`, `:
 
 Edits made while a deletion or truncation is in progress are kept in a recovery buffer. Use `:write <file>` to save a local copy or `:ArangoDocumentDuplicate` to recover the content as a new draft.
 
-AQL queries open with a companion JSON bind-variable buffer. Commands and normal-mode mappings work in both buffers; visual selections apply only to the query. Execution and profiling ask for confirmation before modification queries; validation and explain do not execute them.
+AQL queries open with a companion JSON bind-variable buffer. Commands and normal-mode mappings work in both buffers; visual selections apply only to the query. `:ArangoAqlExecute` and `:ArangoAqlProfile` only explain first and ask for confirmation when the query contains `INSERT`, `UPDATE`, `REPLACE`, `REMOVE`, or `UPSERT` (any case); other queries execute directly. Validation and explain never execute a query.
+
+AQL buffers complete keywords (`k`), ArangoDB 3.12 built-in functions (`f`, inserted without parentheses), and collection names of the session database (`c`) through `omnifunc`. Collection names load in the background, so the first completion may only offer keywords and functions. Comments use `//`. A syntax error reported by the server is marked as one `ERROR` diagnostic at the reported position in the query buffer; the mark is cleared by the next request or by a successful one. These Neovim diagnostics are independent of the `diagnostics` request journal.
 
 Loading history or a named query into an attached `.aql` file keeps it marked as modified and asks before replacing unsaved query edits. Explain and Validate responses remain JSON when table results are selected.
 
-History and named queries persist locally, including bind variables. Saving a named query over an existing name in the same connection and database asks for confirmation. A corrupt history or library file is renamed to `<path>.corrupt-<timestamp>` with a warning before a new file is written. For sensitive queries, disable `aql.history.enabled` or `aql.history.store_bind_vars`, and avoid saving sensitive values in the query library. See [`:help arangodb.nvim-aql`](doc/arangodb.nvim.txt) for storage, session, and command details.
+History and named queries persist locally, including bind variables. Their pickers provide search and preview and require `snacks.nvim`; there is no `vim.ui.select` fallback. `<C-x>` opens an actions menu with Restore, Delete entry, and Clear history (confirmed) for history, and Load or Delete (confirmed) for named queries. Saving a named query over an existing name in the same connection and database asks for confirmation. A corrupt history or library file is renamed to `<path>.corrupt-<timestamp>` with a warning before a new file is written. For sensitive queries, disable `aql.history.enabled` or `aql.history.store_bind_vars`, and avoid saving sensitive values in the query library. See [`:help arangodb.nvim-aql`](doc/arangodb.nvim.txt) for storage, session, and command details.
 
 Default AQL-buffer mappings:
 
@@ -289,7 +295,9 @@ Default document-picker actions:
 | `<C-x>` | Open the actions menu |
 | `<C-b>` | Go back |
 
-Picker navigation works in normal and insert mode. Collection/document creation, duplication, schema and index management, and destructive actions are available through `<C-x>`. Explicitly configured write mappings are normal-mode-only. Destructive operations require confirmation, and modified-buffer guards protect unsaved edits.
+Picker navigation works in normal and insert mode. Collection/document creation, duplication, schema and index management, collection drop, and other destructive actions are available through `<C-x>`. Explicitly configured write mappings are normal-mode-only. Destructive operations require confirmation, modified-buffer guards protect unsaved edits, and dropping a collection refuses system collections and asks for confirmation with the collection and its document count when known. Set `picker_keymaps.drop_collection` for a dedicated key.
+
+In a collection view, the actions menu also offers *Sort by field…* (attribute path, then Ascending, Descending, or Default order) and *Open in AQL* (opens the AQL editor seeded with the equivalent query and bind variables). The sort is shown in the picker title and kept across paging, `:ArangoBack`, and `:ArangoResume`; changing it restarts at page 1. Both entries are available only in collection views, not related views. Set `picker_keymaps.sort` or `picker_keymaps.open_aql` for a dedicated key; both are unset by default.
 
 ArangoDB enforces permissions: reads need read access, writes need write access, and collection/index administration needs the corresponding privileges. See [`:help arangodb.nvim-development`](doc/arangodb.nvim.txt) for permissions and collection-copy limitations.
 
@@ -325,11 +333,11 @@ After a fresh seed, the `result` array contains:
 ]
 ```
 
-The GIF first changes Alice's role to `Maintainer`, so its query shows that saved value. In the result buffer, use `:ArangoAqlResultFormat table` for a compact view, or `:ArangoAqlExport /tmp/active-users.csv` to export **the current page**. The export does not fetch all remaining cursor pages.
+The GIF first changes Alice's role to `Maintainer`, so its query shows that saved value. In the result buffer, use `:ArangoAqlResultFormat table` for a compact view. `:ArangoAqlExport /tmp/active-users.csv` exports the displayed page; `:ArangoAqlExport!` first fetches the remaining cursor pages and exports all rows in order. The all-pages export is asynchronous, can be cancelled with `:ArangoAqlCancel`, leaves the displayed page unchanged, and writes no file when a page request fails.
 
 ## Graph explorer
 
-Run `:ArangoGraph [database]` and select a graph and start document, or use `:ArangoDocumentGraph` from a document. Exploration is bounded by depth and node count. See [`:help arangodb.nvim-graph`](doc/arangodb.nvim.txt) for navigation keys and limits.
+Run `:ArangoGraph [database]` and select a graph and start document, or use `:ArangoDocumentGraph` from a document. Exploration is bounded by depth and node count; when the graph has more vertices than `graph.max_nodes`, the header reports `Limit: N (truncated — raise graph.max_nodes)`. See [`:help arangodb.nvim-graph`](doc/arangodb.nvim.txt) for navigation keys and limits.
 
 ## Lua API
 

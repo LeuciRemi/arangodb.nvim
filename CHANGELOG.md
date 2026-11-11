@@ -4,6 +4,21 @@ All notable changes to arangodb.nvim are documented here.
 
 ## [Unreleased]
 
+### Added
+
+- Mark positioned AQL syntax errors as `ERROR` diagnostics (namespace `arangodb.nvim.aql`, source `ArangoDB`) in the query buffer when Execute, Profile, Explain, or Validate fails; the mark clears on the next request and after a success.
+- Add `:ArangoAqlExport!` to fetch every remaining cursor page and export the rows of all pages in order. It is asynchronous, cancellable with `:ArangoAqlCancel`, leaves the displayed page unchanged, and writes no file when a page request fails; `:ArangoAqlExport` still exports the displayed page.
+- Add `remove()` and `clear()` to `arangodb.aql_history`, plus a history picker actions menu with Restore, Delete entry, and confirmed Clear history.
+- Add omni-completion for AQL buffers through `ftplugin/aql.lua`: keywords, ArangoDB 3.12 built-in functions, and asynchronously loaded collection names, with `// %s` comments and no completion in bind buffers.
+- Add "Drop collection" to the collections actions menu with system-collection refusal, modified-buffer guards, a confirmation naming the collection and its document count, and cleanup of its unmodified document buffers.
+- Add "Sort by field…" and "Open in AQL" to the document picker actions menu for collection views, kept in the route across paging and navigation, with optional `picker_keymaps.sort` and `picker_keymaps.open_aql` keys and a shared `arangodb.client.browse_query()` builder.
+
+### Changed
+
+- Rebuild the named-query library as a snacks.nvim picker with search and preview instead of nested `vim.ui.select` prompts; `<C-x>` opens Load and confirmed Delete.
+- Explain AQL queries before Execute and Profile only when the text contains `INSERT`, `UPDATE`, `REPLACE`, `REMOVE`, or `UPSERT` as a whole word, so read queries no longer pay for an explain request.
+- Request one row beyond `graph.max_nodes` and report omitted vertices in the header as `Limit: N (truncated — raise graph.max_nodes)` instead of dropping them silently.
+
 ### Fixed
 
 - Resolve HTTP hostnames asynchronously and try available addresses while preserving timeout and cancellation behavior.
@@ -46,6 +61,7 @@ All notable changes to arangodb.nvim are documented here.
 
 - Document the AQL `bind_vars` option, `:ArangoResume` restoring the last view, connection URL validation, corrupt-file backups, and completion without network access in the READMEs and Vim help.
 - Move the result-page mappings to the result buffer, add the missing French Lua API and health check sections, and verify in CI that `doc/tags` matches the help file.
+- Document AQL error diagnostics and omni-completion, `:ArangoAqlExport!`, history and library picker actions, drop collection, sort and Open in AQL, graph truncation, and the new picker keymaps in both READMEs and Vim help.
 
 ## [0.6.2] - 2026-09-07
 

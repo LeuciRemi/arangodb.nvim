@@ -97,7 +97,7 @@ package.loaded["arangodb.client"] = {
       items = {},
     }
   end,
-  browse_collection_async = function(_, _, _, search, limit, cursor_id, done)
+  browse_collection_async = function(_, _, _, search, limit, cursor_id, _, done)
     vim.schedule(function()
       done(nil, {
         database = "test",
@@ -173,6 +173,7 @@ assert_actions_unmapped(collection_picker, {
   "arango_duplicate_collection",
   "arango_rename_collection",
   "arango_truncate_collection",
+  "arango_drop_collection",
 })
 assert(
   vim.wait(1000, function()
@@ -282,6 +283,8 @@ assert_actions_unmapped(document_picker, {
   "arango_delete_document",
   "arango_truncate_collection",
   "arango_manage_indexes",
+  "arango_sort",
+  "arango_open_aql",
 })
 
 document_picker.opts.actions.arango_manage_indexes(document_picker)
