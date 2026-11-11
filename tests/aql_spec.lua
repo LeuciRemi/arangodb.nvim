@@ -631,4 +631,101 @@ return {
       h.matches("| 1 |", table.concat(vim.api.nvim_buf_get_lines(session.result_buf, 0, -1, false), "\n"))
     end)
   end),
+
+  h.test("declining the overwrite prompt keeps the stored named query", function()
+    local config_module = require("arangodb.config")
+    local library = require("arangodb.aql_library")
+    local path = vim.fn.tempname() .. ".json"
+    local original_input = vim.ui.input
+    local original_confirm = vim.fn.confirm
+    local prompts = {}
+    local ok, err = xpcall(function()
+      with_aql(base_client(), function(aql)
+        config_module.setup({ aql = { library = { path = path }, history = { enabled = false } } })
+        library.put({ name = "keep me", connection = "local", database = "test", query = "RETURN 1" })
+        local session = aql.open({ config = config, connection = "local", query = "RETURN 2" })
+        vim.ui.input = function(_, done)
+          done("keep me")
+        end
+        vim.fn.confirm = function(message, _, default)
+          prompts[#prompts + 1] = { message = message, default = default }
+          return 2
+        end
+        vim.api.nvim_buf_call(session.query_buf, function()
+          vim.cmd("ArangoAqlSave")
+        end)
+        h.eq(1, #prompts)
+        h.matches('Overwrite named AQL query "keep me"', prompts[1].message)
+        h.eq(2, prompts[1].default)
+        local entries = library.load()
+        h.eq(1, #entries)
+        h.eq("RETURN 1", entries[1].query)
+      end)
+    end, debug.traceback)
+    vim.ui.input = original_input
+    vim.fn.confirm = original_confirm
+    vim.fn.delete(path)
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("explaining clears stale result pages and pagination limits", function()
+    local next_calls = 0
+    local notifications = {}
+    local original_notify = vim.notify
+    local ok, err = xpcall(function()
+      with_aql(
+        base_client({
+          execute_aql_async = function(_, _, _, _, done)
+            return async({ result = { 1 }, count = 2, hasMore = true, id = "cursor-explain" }, done)
+          end,
+          next_aql_page_async = function(_, _, done)
+            next_calls = next_calls + 1
+            return async({ result = { 2 }, hasMore = false }, done)
+          end,
+        }),
+        function(aql)
+          vim.notify = function(message)
+            notifications[#notifications + 1] = tostring(message)
+          end
+          local session = aql.open({ config = config, query = "FOR value IN 1..2 RETURN value" })
+          vim.api.nvim_buf_call(session.query_buf, function()
+            vim.cmd("ArangoAqlExecute")
+          end)
+          assert(vim.wait(1000, function()
+            return session.result_buf ~= nil
+          end))
+          vim.api.nvim_buf_call(session.result_buf, function()
+            vim.cmd("ArangoAqlNextPage")
+          end)
+          assert(vim.wait(1000, function()
+            return session.page_index == 2
+          end))
+          vim.api.nvim_buf_call(session.query_buf, function()
+            vim.cmd("ArangoAqlExplain")
+          end)
+          assert(vim.wait(1000, function()
+            return session.current_result ~= nil and session.current_result.mode == "explain"
+          end))
+          local explain_text = table.concat(vim.api.nvim_buf_get_lines(session.result_buf, 0, -1, false), "\n")
+          h.matches('"explain"', explain_text)
+          vim.api.nvim_buf_call(session.result_buf, function()
+            vim.cmd("ArangoAqlPrevPage")
+          end)
+          h.eq(explain_text, table.concat(vim.api.nvim_buf_get_lines(session.result_buf, 0, -1, false), "\n"))
+          h.eq("explain", session.current_result.mode)
+          vim.api.nvim_buf_call(session.result_buf, function()
+            vim.cmd("ArangoAqlNextPage")
+          end)
+          h.eq(true, vim.tbl_contains(notifications, "No next AQL result page"))
+          h.eq(1, next_calls)
+        end
+      )
+    end, debug.traceback)
+    vim.notify = original_notify
+    if not ok then
+      error(err, 0)
+    end
+  end),
 }

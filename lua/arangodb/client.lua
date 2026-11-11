@@ -192,7 +192,14 @@ local function run_aql(config, query, bind_vars, batch_size)
     if not cursor_id or cursor_id == "" then
       error("ArangoDB returned an incomplete cursor response")
     end
-    data = database_request(config, "PUT", "/_api/cursor/" .. core.url_encode(cursor_id))
+    local cursor_path = "/_api/cursor/" .. core.url_encode(cursor_id)
+    local fetched, page = pcall(database_request, config, "PUT", cursor_path)
+    if not fetched then
+      -- Release the server cursor instead of leaking it, then report the real failure.
+      pcall(database_request, config, "DELETE", cursor_path)
+      error(page, 0)
+    end
+    data = page
     vim.list_extend(result, data.result or {})
     if extra == nil then
       extra = data.extra
@@ -889,8 +896,17 @@ function M.save_document(config, document_id, document, opts)
   local revision = opts.force ~= true and type(document._rev) == "string" and document._rev or nil
   local headers = revision and { ["If-Match"] = vim.json.encode(revision) } or nil
   local saved = database_request(config, "PUT", document_path(collection, key), document, { headers = headers })
-  local current = get_document_raw(config, collection, key)
+  -- The write is committed at this point: stale metadata must go even when the
+  -- refresh below fails, and the caller must hear about the save, not the GET.
   invalidate_cache(config)
+  local refreshed, current = pcall(get_document_raw, config, collection, key)
+  if not refreshed then
+    current = vim.tbl_extend("force", document, {
+      _id = saved._id or document._id or document_id,
+      _key = saved._key or document._key or key,
+      _rev = saved._rev or document._rev,
+    })
+  end
 
   return {
     database = config.database,
@@ -931,10 +947,24 @@ function M.save_document_async(config, document_id, document, opts, callback)
   step(function(done)
     return database_request_async(config, "PUT", document_path(collection, key), document, done, { headers = headers })
   end, function(saved, next_step, finish)
+    invalidate_cache(config)
     next_step(function(done)
-      return database_request_async(config, "GET", document_path(collection, key), nil, done)
+      return database_request_async(config, "GET", document_path(collection, key), nil, function(err, current)
+        if not err then
+          done(nil, current)
+          return
+        end
+        -- The write succeeded: report the sent document when the refresh fails.
+        done(
+          nil,
+          vim.tbl_extend("force", document, {
+            _id = saved._id or document._id or document_id,
+            _key = saved._key or document._key or key,
+            _rev = saved._rev or document._rev,
+          })
+        )
+      end)
     end, function(current)
-      invalidate_cache(config)
       finish(nil, {
         database = config.database,
         id = document_id,
@@ -1357,8 +1387,15 @@ end
 function M.create_document(config, collection, document)
   local target_collection, key, payload = sanitize_new_document(collection, document)
   local created = database_request(config, "POST", "/_api/document/" .. core.url_encode(target_collection), payload)
-  local current = get_document_raw(config, target_collection, created._key or key)
   invalidate_cache(config)
+  local refreshed, current = pcall(get_document_raw, config, target_collection, created._key or key)
+  if not refreshed then
+    current = vim.tbl_extend("force", payload, {
+      _id = created._id,
+      _key = created._key or key,
+      _rev = created._rev,
+    })
+  end
 
   return {
     database = config.database,
@@ -1384,10 +1421,30 @@ function M.create_document_async(config, collection, document, callback)
       done
     )
   end, function(created, next_step, finish)
+    invalidate_cache(config)
     next_step(function(done)
-      return database_request_async(config, "GET", document_path(target_collection, created._key or key), nil, done)
+      return database_request_async(
+        config,
+        "GET",
+        document_path(target_collection, created._key or key),
+        nil,
+        function(err, current)
+          if not err then
+            done(nil, current)
+            return
+          end
+          -- The insert succeeded: report the created document without the refresh.
+          done(
+            nil,
+            vim.tbl_extend("force", payload, {
+              _id = created._id,
+              _key = created._key or key,
+              _rev = created._rev,
+            })
+          )
+        end
+      )
     end, function(current)
-      invalidate_cache(config)
       finish(nil, {
         database = config.database,
         id = current._id,

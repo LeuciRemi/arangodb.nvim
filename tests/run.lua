@@ -19,6 +19,6 @@ for _, file in ipairs(files) do
 end
 
 vim.api.nvim_out_write(string.format("%d tests, %d failures\n", total, #failures))
-if #failures > 0 then
+if total == 0 or #failures > 0 then
   vim.cmd("cquit 1")
 end

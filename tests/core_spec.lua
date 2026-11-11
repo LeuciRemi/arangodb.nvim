@@ -182,6 +182,61 @@ return {
     vim.env.NVIM_ARANGO_REPORTING_URL = original
   end),
 
+  h.test("command completion never queries the server", function()
+    local config = require("arangodb.config")
+    local client = require("arangodb.client")
+    config.setup({
+      auto_discover = true,
+      connections = { reporting = { url = "http://db.example.com:8529/reporting" } },
+    })
+    require("arangodb.commands").setup()
+
+    local network_calls = 0
+    local original = client.list_databases
+    client.list_databases = function()
+      network_calls = network_calls + 1
+      return {}
+    end
+
+    local ok, result = xpcall(function()
+      return vim.fn.getcompletion("ArangoAql rep", "cmdline")
+    end, debug.traceback)
+
+    client.list_databases = original
+    config.setup()
+    if not ok then
+      error(result, 0)
+    end
+
+    h.eq({ "reporting" }, result)
+    h.eq(0, network_calls)
+  end),
+
+  h.test("cancellations are not reported while transport failures are", function()
+    local core = require("arangodb.core")
+    local errors = require("arangodb.errors")
+    local original = vim.notify
+    local notifications = {}
+    vim.notify = function(message, level)
+      notifications[#notifications + 1] = { message = message, level = level }
+    end
+
+    local ok, err = xpcall(function()
+      core.notify_error(errors.new({ kind = "cancelled", message = "ArangoDB request cancelled" }))
+      h.eq(0, #notifications)
+
+      core.notify_error(errors.new({ kind = "transport", message = "ArangoDB request timed out" }))
+      h.eq(1, #notifications)
+      h.eq(vim.log.levels.ERROR, notifications[1].level)
+      h.matches("timed out", notifications[1].message)
+    end, debug.traceback)
+
+    vim.notify = original
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
   h.test("setup replaces plugin-owned global keymaps", function()
     local arangodb = require("arangodb")
     arangodb.setup({ keymaps = { browse = "<F8>" } })

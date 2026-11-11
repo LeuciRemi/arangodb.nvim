@@ -57,6 +57,23 @@ local function same_entry(left, right)
     and vim.deep_equal(left.bind_vars or {}, right.bind_vars or {})
 end
 
+local function back_up_corrupt(path)
+  local backup = string.format("%s.corrupt-%d", path, os.time())
+  if uv and uv.fs_rename(path, backup) then
+    vim.notify(
+      "Invalid AQL history file backed up to " .. backup,
+      vim.log.levels.WARN,
+      { title = "ArangoDB AQL History" }
+    )
+  else
+    vim.notify(
+      "Invalid AQL history file could not be backed up",
+      vim.log.levels.WARN,
+      { title = "ArangoDB AQL History" }
+    )
+  end
+end
+
 local function write_entries(entries)
   assert(uv, "libuv is required to persist AQL history")
   local path = M.path()
@@ -94,7 +111,10 @@ function M.add(entry)
     sanitized.bind_vars = vim.deepcopy(entry.bind_vars or {})
   end
 
-  local existing = M.load()
+  local existing, warning = M.load()
+  if warning then
+    back_up_corrupt(M.path())
+  end
   local entries = { sanitized }
   for _, item in ipairs(existing) do
     local retained = vim.deepcopy(item)

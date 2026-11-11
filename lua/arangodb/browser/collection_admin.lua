@@ -147,7 +147,9 @@ local function inspect_index(config, collection, index, on_change, on_back)
       end
       if action == "Delete index" then
         delete_index(config, collection, index, on_change, on_back)
+        return
       end
+      M.manage_indexes(config, collection, on_change, on_back)
     end
   )
 end

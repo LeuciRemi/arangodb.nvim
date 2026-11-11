@@ -60,6 +60,27 @@ return {
     config.setup()
   end),
 
+  h.test("adding history after a corrupt file keeps a backup", function()
+    local config = require("arangodb.config")
+    local path = temporary_path()
+    vim.fn.writefile({ "not-json" }, path)
+    config.setup({ aql = { history = { path = path } } })
+    package.loaded["arangodb.aql_history"] = nil
+    local history = require("arangodb.aql_history")
+
+    history.add({ connection = "local", database = "test", query = "RETURN 9", bind_vars = {} })
+
+    local backups = vim.fn.glob(path .. ".corrupt-*", false, true)
+    h.eq(1, #backups)
+    h.eq({ "not-json" }, vim.fn.readfile(backups[1]))
+    local entries = history.load()
+    h.eq(1, #entries)
+    h.eq("RETURN 9", entries[1].query)
+    pcall(uv.fs_unlink, backups[1])
+    pcall(uv.fs_unlink, path)
+    config.setup()
+  end),
+
   h.test("disabling bind variable storage scrubs existing history entries", function()
     local config = require("arangodb.config")
     local path = temporary_path()

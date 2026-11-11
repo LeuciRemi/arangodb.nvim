@@ -43,12 +43,19 @@ function M.decode(response, context)
     end
   end
 
-  if response.status >= 400 then
+  if response.status < 200 or response.status > 299 then
     local message
     local error_num
     if type(decoded) == "table" then
       message = decoded.errorMessage or decoded.message
       error_num = decoded.errorNum
+    end
+    if type(message) ~= "string" or message == "" then
+      local headers = type(response.headers) == "table" and response.headers or {}
+      local location = headers["location"] or headers["Location"]
+      if response.status >= 300 and response.status < 400 and type(location) == "string" and location ~= "" then
+        message = "ArangoDB request was redirected to " .. location
+      end
     end
     if type(message) ~= "string" or message == "" then
       message = body ~= "" and trim_message(body) or ("ArangoDB request failed with HTTP " .. response.status)

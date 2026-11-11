@@ -21,8 +21,9 @@ end
 
 local function node_label(vertex)
   for _, field in ipairs({ "name", "title", "label", "_key", "_id" }) do
-    if vertex[field] ~= nil then
-      return tostring(vertex[field])
+    local value = vertex[field]
+    if value ~= nil and value ~= vim.NIL then
+      return tostring(value)
     end
   end
   return "?"

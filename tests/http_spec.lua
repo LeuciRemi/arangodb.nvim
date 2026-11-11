@@ -428,4 +428,25 @@ return {
     end
     h.eq(200, result.status)
   end),
+
+  h.test("synchronous requests report watchdog timeouts as transport errors", function()
+    local http = require("arangodb.http")
+    local original_async = http.request_async
+    -- Keep the request pending so the synchronous watchdog has to give up.
+    http.request_async = function()
+      return { cancel = function() end }
+    end
+
+    local ok, err = pcall(http.request, {
+      host = "localhost",
+      port = 8529,
+      path = "/_api/version",
+      timeout = 20,
+    })
+
+    http.request_async = original_async
+    h.eq(false, ok)
+    h.eq(true, require("arangodb.errors").is(err, "transport"))
+    h.matches("timed out", tostring(err))
+  end),
 }

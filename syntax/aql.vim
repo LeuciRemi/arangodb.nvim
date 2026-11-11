@@ -3,10 +3,11 @@ if exists("b:current_syntax")
 endif
 
 syntax case ignore
-syntax keyword aqlKeyword FOR LET FILTER SEARCH SORT LIMIT COLLECT AGGREGATE RETURN DISTINCT WINDOW WITH INTO KEEP COUNT OPTIONS PRUNE GRAPH SHORTEST_PATH K_SHORTEST_PATH K_PATHS ALL_SHORTEST_PATHS OUTBOUND INBOUND ANY
+syntax keyword aqlKeyword FOR LET FILTER SEARCH SORT ASC DESC LIMIT COLLECT AGGREGATE RETURN DISTINCT WINDOW WITH INTO KEEP COUNT OPTIONS PRUNE GRAPH SHORTEST_PATH K_SHORTEST_PATH K_PATHS ALL_SHORTEST_PATHS OUTBOUND INBOUND
 syntax keyword aqlModification INSERT UPDATE REPLACE REMOVE UPSERT
 syntax keyword aqlBoolean true false null
 syntax keyword aqlOperator AND OR NOT IN LIKE ALL NONE ANY AT LEAST
+syntax match aqlFunction /\<\h\w*\ze\s*(/
 syntax match aqlBindVar /@@\=[A-Za-z_][A-Za-z0-9_]*/
 syntax match aqlNumber /\<\d\+\(\.\d\+\)\=\>/
 syntax match aqlLineComment /\/\/.*$/
@@ -20,6 +21,7 @@ highlight default link aqlKeyword Keyword
 highlight default link aqlModification Statement
 highlight default link aqlBoolean Boolean
 highlight default link aqlOperator Operator
+highlight default link aqlFunction Function
 highlight default link aqlBindVar Identifier
 highlight default link aqlNumber Number
 highlight default link aqlLineComment Comment

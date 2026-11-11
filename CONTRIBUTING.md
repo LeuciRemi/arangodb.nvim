@@ -35,6 +35,6 @@ dependencies are separate from plugin and test dependencies.
 - Add regression tests for bug fixes when practical.
 - Update `README.md`, `README.fr.md`, and Vim help when behavior or configuration changes.
 - Do not include credentials, database contents, generated editor files, or unrelated formatting.
-- Confirm that `make lint` passes before requesting review.
+- Confirm that `make lint` passes and that `make docs` leaves `doc/tags` unchanged before requesting review; CI checks both.
 
 By participating, you agree to be respectful, constructive, and welcoming. Harassment, discrimination, and personal attacks are not accepted in project spaces.

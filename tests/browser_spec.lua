@@ -797,6 +797,277 @@ return {
     end
   end),
 
+  h.test("resume reopens the last browser route without clearing history", function()
+    local document_buf
+    local ok, err = xpcall(function()
+      with_picker_harness(function(harness)
+        with_browser({}, function(browser)
+          browser.open({ kind = "collections", config = config })
+          local picker = harness.last()
+          picker.opts.actions.arango_create_document(picker, { item = { name = "items" } })
+          assert(
+            vim.wait(1000, function()
+              local buf = vim.api.nvim_get_current_buf()
+              return vim.b[buf].arangodb_document_is_new == true
+            end),
+            "Draft document buffer did not become active"
+          )
+          document_buf = vim.api.nvim_get_current_buf()
+          h.eq(true, picker.closed)
+          h.eq(0, harness.active_count())
+
+          browser.resume()
+          local resumed = harness.last()
+          assert(resumed ~= picker, "resume did not open a new picker")
+          h.eq(false, resumed.closed)
+          h.matches("^Arango test collections", resumed.opts.title)
+          h.eq(1, harness.active_count())
+
+          browser.back()
+          assert(
+            vim.wait(1000, function()
+              return harness.last() ~= resumed
+            end),
+            "resume cleared the back history"
+          )
+        end)
+      end)
+    end, debug.traceback)
+
+    if document_buf and vim.api.nvim_buf_is_valid(document_buf) then
+      vim.api.nvim_buf_delete(document_buf, { force = true })
+    end
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("renaming a collection reopens the collections picker", function()
+    local original_input = vim.ui.input
+    local pending_input
+    vim.ui.input = function(_, done)
+      pending_input = done
+    end
+
+    local ok, err = xpcall(function()
+      with_picker_harness(function(harness)
+        with_browser({
+          rename_collection_async = function(_, _, new_name, done)
+            vim.schedule(function()
+              done(nil, { name = new_name })
+            end)
+            return { cancel = function() end }
+          end,
+        }, function(browser)
+          browser.open({ kind = "collections", config = config })
+          local picker = harness.last()
+          picker.opts.actions.arango_rename_collection(picker, { item = { name = "items" } })
+          assert(
+            vim.wait(1000, function()
+              return pending_input ~= nil and picker.closed
+            end),
+            "Collection rename prompt did not start"
+          )
+
+          pending_input("renamed")
+          assert(
+            vim.wait(1000, function()
+              return harness.active_count() == 1 and harness.last() ~= picker
+            end),
+            "Renaming did not reopen the collections picker"
+          )
+          local reopened = harness.last()
+          h.eq(false, reopened.closed)
+
+          pending_input = nil
+          reopened.opts.actions.arango_rename_collection(reopened, { item = { name = "items" } })
+          assert(
+            vim.wait(1000, function()
+              return pending_input ~= nil and reopened.closed
+            end),
+            "Collection rename prompt did not start again"
+          )
+
+          pending_input(nil)
+          assert(
+            vim.wait(1000, function()
+              return harness.active_count() == 1 and harness.last() ~= reopened
+            end),
+            "Cancelling the rename did not reopen the collections picker"
+          )
+        end)
+      end)
+    end, debug.traceback)
+
+    vim.ui.input = original_input
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("the collections action menu offers document creation", function()
+    local original_select = vim.ui.select
+    local choices
+    vim.ui.select = function(items, _, done)
+      choices = items
+      for _, choice in ipairs(items) do
+        if choice.action == "arango_create_document" then
+          done(choice)
+          return
+        end
+      end
+      done(nil)
+    end
+
+    local ok, err = xpcall(function()
+      with_picker_harness(function(harness)
+        with_browser({}, function(browser)
+          browser.open({ kind = "collections", config = config })
+          local picker = harness.last()
+
+          picker.opts.actions.arango_action_menu(picker, { item = { name = "items" } })
+          assert(
+            vim.wait(1000, function()
+              return choices ~= nil
+            end),
+            "Collection action menu did not open"
+          )
+          local create
+          for _, choice in ipairs(choices) do
+            if choice.action == "arango_create_document" then
+              create = choice
+            end
+          end
+          assert(create, "Create document choice is missing")
+          h.matches("^Create document", create.label)
+          h.eq("arango_create_document", picker.list.win.last_action)
+
+          choices = nil
+          picker.opts.actions.arango_action_menu(picker)
+          assert(
+            vim.wait(1000, function()
+              return choices ~= nil
+            end),
+            "Collection action menu did not reopen"
+          )
+          for _, choice in ipairs(choices) do
+            assert(choice.action ~= "arango_create_document", "Create document offered without a collection")
+          end
+        end)
+      end)
+    end, debug.traceback)
+
+    vim.ui.select = original_select
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("a failed next page retries with a fresh cursor query", function()
+    local cursors = {}
+    local calls = 0
+    local ok, err = xpcall(function()
+      with_picker_harness(function(harness)
+        with_browser({
+          browse_collection_async = function(_, _, _, _, _, cursor_id, done)
+            calls = calls + 1
+            cursors[calls] = cursor_id
+            if calls == 1 then
+              done(nil, {
+                total_count = 2,
+                has_more = true,
+                cursor_id = "cursor-1",
+                items = {
+                  {
+                    key = "a",
+                    id = "items/a",
+                    field = "_key",
+                    field_value = "a",
+                    field_value_text = "a",
+                    preview = '{"_id":"items/a","_key":"a"}',
+                  },
+                },
+              })
+            else
+              done(require("arangodb.errors").new({ kind = "transport", message = "cursor is gone" }))
+            end
+            return { cancel = function() end }
+          end,
+          close_cursor_async = function() end,
+        }, function(browser)
+          browser.open({ kind = "collection", config = config, collection = "items", field = "_key" })
+          local picker = harness.last()
+          local ctx = {
+            filter = { search = "" },
+            async = {
+              aborted = function()
+                return false
+              end,
+              on = function() end,
+              suspend = function() end,
+              resume = function() end,
+            },
+          }
+          local finder = picker.opts.finder(picker, ctx)
+
+          finder(function() end)
+          h.eq(nil, cursors[1])
+
+          picker.opts.actions.arango_next_page(picker)
+          finder(function() end)
+          h.eq("cursor-1", cursors[2])
+
+          picker.opts.actions.arango_next_page(picker)
+          finder(function() end)
+          h.eq(nil, cursors[3])
+          h.eq(3, calls)
+        end)
+      end)
+    end, debug.traceback)
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
+  h.test("going back keeps a document route that cannot be reopened", function()
+    local original_notify = vim.notify
+    local attempts = 0
+    vim.notify = function() end
+    local ok, err = xpcall(function()
+      with_browser({
+        get_document_async = function(_, _, done)
+          attempts = attempts + 1
+          done(require("arangodb.errors").new({ kind = "transport", message = "document unavailable" }))
+          return { cancel = function() end }
+        end,
+      }, function(browser)
+        browser.open_document(config, document())
+        local source = vim.fn.bufnr("arangodb-buffer://test/items/a")
+        assert(source ~= -1, "Document buffer was not opened")
+        vim.api.nvim_buf_call(source, function()
+          vim.cmd("ArangoDocumentDuplicate")
+        end)
+        h.eq(0, attempts)
+
+        browser.back()
+        h.eq(1, attempts)
+        browser.back()
+        h.eq(2, attempts)
+
+        for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+          if vim.api.nvim_buf_is_valid(buf) and vim.b[buf].arangodb_document_is_new then
+            vim.api.nvim_buf_delete(buf, { force = true })
+          end
+        end
+        vim.api.nvim_buf_delete(source, { force = true })
+      end)
+    end, debug.traceback)
+    vim.notify = original_notify
+    if not ok then
+      error(err, 0)
+    end
+  end),
+
   h.test("revision conflicts can be explicitly force-overwritten", function()
     local calls = {}
     local original_select = vim.ui.select

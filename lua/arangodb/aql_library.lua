@@ -79,6 +79,37 @@ local function same_identity(left, right)
   return left.name == right.name and left.connection == right.connection and left.database == right.database
 end
 
+local function back_up_corrupt(path)
+  local backup = string.format("%s.corrupt-%d", path, os.time())
+  if uv and uv.fs_rename(path, backup) then
+    vim.notify(
+      "Invalid AQL library file backed up to " .. backup,
+      vim.log.levels.WARN,
+      { title = "ArangoDB AQL Library" }
+    )
+  else
+    vim.notify(
+      "Invalid AQL library file could not be backed up",
+      vim.log.levels.WARN,
+      { title = "ArangoDB AQL Library" }
+    )
+  end
+end
+
+--- Return the stored query sharing the name, connection, and database of `entry`.
+function M.find(entry)
+  local lookup = {
+    name = vim.trim(type(entry.name) == "string" and entry.name or ""),
+    connection = entry.connection,
+    database = entry.database,
+  }
+  for _, existing in ipairs(M.load()) do
+    if same_identity(existing, lookup) then
+      return existing
+    end
+  end
+end
+
 --- Create or replace a named query in its connection/database scope.
 function M.put(entry)
   assert(valid_entry(entry), "A named AQL query requires a non-empty name and query")
@@ -92,8 +123,12 @@ function M.put(entry)
     bind_vars = vim.deepcopy(entry.bind_vars or {}),
     updated_at = os.date("!%Y-%m-%dT%H:%M:%SZ"),
   }
+  local existing_entries, warning = M.load()
+  if warning then
+    back_up_corrupt(M.path())
+  end
   local entries = { saved }
-  for _, existing in ipairs(M.load()) do
+  for _, existing in ipairs(existing_entries) do
     if not same_identity(existing, saved) then
       entries[#entries + 1] = existing
     end
@@ -106,7 +141,8 @@ end
 function M.remove(entry)
   local retained = {}
   local removed = false
-  for _, existing in ipairs(M.load()) do
+  local existing_entries, warning = M.load()
+  for _, existing in ipairs(existing_entries) do
     if same_identity(existing, entry) then
       removed = true
     else
@@ -114,6 +150,9 @@ function M.remove(entry)
     end
   end
   if removed then
+    if warning then
+      back_up_corrupt(M.path())
+    end
     write_entries(retained)
   end
   return removed

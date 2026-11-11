@@ -14,6 +14,7 @@ local state = {
   history = {},
   current_view = nil,
   view_meta = nil,
+  last_route = nil,
 }
 
 local ns = vim.api.nvim_create_namespace("arangodb.nvim")
@@ -566,7 +567,7 @@ local function create_collection_with_prompt(config, picker, callback)
   end)
 end
 
-local function rename_collection_with_prompt(config, collection, callback, picker)
+local function rename_collection_with_prompt(config, collection, callback, picker, reopen)
   if
     not ensure_unmodified_document_buffers({
       config = config,
@@ -585,7 +586,9 @@ local function rename_collection_with_prompt(config, collection, callback, picke
     }, function(value)
       local new_name = value and vim.trim(value) or ""
       if value == nil or new_name == "" or new_name == collection then
-        restore_picker_input_focus(picker)
+        if reopen then
+          reopen()
+        end
         return
       end
 
@@ -598,10 +601,14 @@ local function rename_collection_with_prompt(config, collection, callback, picke
         if callback then
           callback(result, final_name, previous)
         end
-        restore_picker_input_focus(picker)
+        if reopen then
+          reopen()
+        end
       end, function(err)
         arango.notify_error(err, "ArangoDB Rename Collection")
-        restore_picker_input_focus(picker)
+        if reopen then
+          reopen()
+        end
       end)
     end)
   end)
@@ -1386,7 +1393,7 @@ local function related_route_title(route)
   return route.field or "related"
 end
 
-local function open_route(route, prev_picker)
+local function open_route(route, prev_picker, on_error)
   if not route or type(route) ~= "table" then
     return
   end
@@ -1408,7 +1415,7 @@ local function open_route(route, prev_picker)
       close_picker_then(prev_picker, function()
         M.open_document(route.config, payload)
       end)
-    end)
+    end, on_error)
     return
   end
 
@@ -1438,7 +1445,10 @@ go_back = function(current)
     return
   end
 
-  open_route(route, current)
+  open_route(route, current, function(err)
+    push_history(route)
+    arango.notify_error(err, "ArangoDB")
+  end)
 end
 
 --- Global entry point for :ArangoBack.
@@ -1967,6 +1977,7 @@ browse_collections = function(config, opts, prev_picker)
   end
 
   opts = opts or {}
+  state.last_route = collections_route(config, opts, opts.search or "")
   local meta = {
     search = opts.search or "",
     collection_count = 0,
@@ -2147,6 +2158,8 @@ browse_collections = function(config, opts, prev_picker)
 
     if collection then
       choices[#choices + 1] = { label = "Open collection (Enter)", action = "arango_open_collection" }
+      choices[#choices + 1] =
+        { label = action_label("Create document", keymaps.create), action = "arango_create_document" }
       choices[#choices + 1] = {
         label = action_label("Duplicate collection", keymaps.duplicate_collection),
         action = "arango_duplicate_collection",
@@ -2306,12 +2319,20 @@ browse_collections = function(config, opts, prev_picker)
           return
         end
 
-        rename_collection_with_prompt(config, collection, function(_, new_name)
-          clear_collection_overview()
-          set_picker_search(current, new_name)
-          refresh_picker(current)
-          vim.notify(string.format("Collection renamed to %s", new_name), vim.log.levels.INFO)
-        end, current)
+        local route = collections_route(config, opts, current_search(current))
+        rename_collection_with_prompt(
+          config,
+          collection,
+          function(_, new_name)
+            clear_collection_overview()
+            route.search = new_name
+            vim.notify(string.format("Collection renamed to %s", new_name), vim.log.levels.INFO)
+          end,
+          current,
+          function()
+            open_route(route)
+          end
+        )
       end,
       arango_truncate_collection = function(current, item)
         local collection = selected_collection(current, item)
@@ -2436,6 +2457,8 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
       title = picker_title,
     }
   end
+
+  state.last_route = current_route()
 
   local function open_picker_document(current, item)
     local selected = picker_current_item(current, item)
@@ -2585,6 +2608,12 @@ browse_collection = function(config, collection, field, initial_search, opts, pr
       end
       local err, data = request_cursor_page(ctx, search, previous and previous.cursor_id or nil)
       if err then
+        -- The cursor may be dead: drop the cached page chain so the next
+        -- attempt starts a fresh query instead of retrying the same cursor.
+        -- Stepping back one page keeps the failed target reachable through
+        -- the next-page action, which also keeps has_more truthful.
+        invalidate_pages(math.max(meta.page_index - 1, 1))
+        meta.has_more = true
         return err
       end
       meta.pages[#meta.pages + 1] = data
@@ -2919,13 +2948,17 @@ function M.open(opts)
   end)
 end
 
---- Re-show the active picker, or open the browser again if it was closed.
+--- Re-show the active picker, or restore the last browser route if it was closed.
 function M.resume()
   if state.picker and not state.picker.closed then
     state.picker:show()
     restore_picker_backdrop(state.picker)
     watch_picker_backdrop(state.picker)
     state.picker:focus("input", { show = true })
+    return
+  end
+  if state.last_route then
+    open_route(state.last_route)
     return
   end
   M.open()

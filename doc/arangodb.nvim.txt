@@ -296,6 +296,10 @@ Connection URLs have this form:
 
   http[s]://[user:password@]host[:port]/database
 
+A URL that cannot be parsed, for example one without http:// or https://, is
+rejected by setup() with an error that names the connection. It is never used
+for a request.
+
 Connections come from setup().connections, then vim.g.arangodb_connections,
 then NVIM_ARANGO_<NAME>_URL. The first source wins for duplicate names. Enabled
 auto-discovery adds only names not already configured.
@@ -359,6 +363,10 @@ also build a connection when :ArangoBrowse receives an unconfigured name:
 ===============================================================================
 COMMANDS                                              *arangodb.nvim-commands*
 
+Commands that accept a [database] argument complete from configured connection
+names and from database names discovered earlier in the session. Completion
+performs no network requests.
+
                                                         *:ArangoBrowse*
 :ArangoBrowse [database]
     Open the database and collection browser. A database argument skips the
@@ -366,11 +374,14 @@ COMMANDS                                              *arangodb.nvim-commands*
 
                                                         *:ArangoResume*
 :ArangoResume
-    Re-show the active picker, or start the browser if no picker is active.
+    Re-show the active picker, or reopen the last collections or collection
+    view when the picker was closed. Fall back to |:ArangoBrowse| when no view
+    has been opened yet.
 
                                                          *:ArangoBack*
 :ArangoBack
-    Return to the previous picker or document route.
+    Return to the previous picker or document route. A document that cannot
+    be reopened leaves its history entry in place.
 
                                                           *:ArangoAql*
 :ArangoAql [database]
@@ -470,7 +481,9 @@ The following commands are local to AQL query and bind-variable buffers:
 
                                                            *:ArangoAqlSave*
 :ArangoAqlSave
-    Create or replace a named query with its current bind variables.
+    Create or replace a named query with its current bind variables. Saving
+    over an existing name in the same connection and database asks for
+    confirmation.
 
                                                          *:ArangoAqlCancel*
 :ArangoAqlCancel
@@ -479,7 +492,9 @@ The following commands are local to AQL query and bind-variable buffers:
                                                    *:ArangoAqlNextPage*
                                                   *:ArangoAqlPrevPage*
 Result buffers provide :ArangoAqlNextPage and :ArangoAqlPrevPage. Previous
-pages are cached locally and do not trigger another network request.
+pages are cached locally and do not trigger another network request. The
+aql_keymaps next_page and prev_page keys (default <C-n> and <C-p>) are set
+only in the result buffer; the query buffer does not map them.
 
                                              *:ArangoAqlResultFormat*
 :ArangoAqlResultFormat [json|table]
@@ -500,6 +515,10 @@ credentials, results, and errors. Query text and bind variables may themselves
 be sensitive; disable history or store_bind_vars when appropriate. After
 store_bind_vars is disabled, the next history write also removes bind variables
 from retained entries.
+
+A corrupt history or library file is renamed to <path>.corrupt-<timestamp>
+with a warning before a new file replaces it, so the damaged content is never
+silently overwritten.
 
 Named queries default to stdpath("data")/arangodb.nvim/aql_library.json and
 also use user-only permissions. They contain query text and bind variables,
@@ -579,11 +598,12 @@ resource. Renaming, truncating, or deleting is refused while a matching
 ArangoDB buffer has unsaved changes.
 
 The collection and document actions menus expose index management. The
-collection actions menu also provides the JSON editor for mutable collection
-properties, including validation schemas. The index selector uses the
-configured picker action mapping (<C-x> by default) for creating, inspecting,
-and deleting indexes. <Esc> returns from the action menu to the index selector,
-then from the index selector to the previous collection or document picker.
+collection actions menu also provides Create document for the selected
+collection and the JSON editor for mutable collection properties, including
+validation schemas. The index selector uses the configured picker action
+mapping (<C-x> by default) for creating, inspecting, and deleting indexes.
+<Esc> returns from the action menu to the index selector, then from the index
+selector to the previous collection or document picker.
 
 ===============================================================================
 LUA API                                                    *arangodb.nvim-api*
@@ -592,6 +612,9 @@ LUA API                                                    *arangodb.nvim-api*
   require("arangodb").setup(opts)
   require("arangodb").browse({ database = "work" })
   require("arangodb").aql({ database = "work", query = "RETURN 1" })
+  require("arangodb").aql({ database = "work",
+                            query = "FOR user IN @@collection RETURN user",
+                            bind_vars = { ["@collection"] = "users" } })
   require("arangodb").aql_attach({ database = "work" })
   require("arangodb").aql_library({ database = "work" })
   require("arangodb").graph({ database = "work", graph = "social",
@@ -599,6 +622,10 @@ LUA API                                                    *arangodb.nvim-api*
   require("arangodb").resume()
   require("arangodb").back()
 <
+
+aql() pre-fills the editor: query sets the query buffer text and bind_vars
+sets the companion JSON buffer. Collection bind variables use an @name key
+such as ["@collection"] = "users"; value variables use their plain name.
 
 ===============================================================================
 HEALTH CHECK                                            *arangodb.nvim-health*

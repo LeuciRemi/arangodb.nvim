@@ -34,6 +34,11 @@ jobs:
           version: ${{ matrix.neovim }}
           neovim: true
       - run: make test
+      - name: Check generated help tags
+        if: matrix.neovim == 'stable'
+        run: |
+          make docs
+          git diff --exit-code doc/tags
 
   dependency-smoke-test:
     name: Snacks ${{ matrix.snacks }}

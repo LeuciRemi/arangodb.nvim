@@ -139,6 +139,98 @@ return {
     end)
   end),
 
+  h.test("successful writes succeed even when the refresh read fails", function()
+    with_client(function(opts)
+      if opts.method == "GET" then
+        return json_response({ error = true, errorMessage = "refresh failed" }, 500)
+      end
+      if opts.method == "POST" then
+        return json_response({ _id = "items/new-key", _key = "new-key", _rev = "2" }, 202)
+      end
+      return json_response({ _id = "items/a", _key = "a", _rev = "2" })
+    end, function(client)
+      local saved = client.save_document(config, "items/a", {
+        _id = "items/a",
+        _key = "a",
+        _rev = "1",
+        name = "local",
+      })
+      h.eq("2", saved.document._rev)
+      h.eq("items/a", saved.document._id)
+      h.eq("local", saved.document.name)
+      h.eq("2", saved.meta._rev)
+
+      local saved_async
+      client.save_document_async(config, "items/a", {
+        _id = "items/a",
+        _key = "a",
+        _rev = "1",
+        name = "asynchronous",
+      }, function(err, value)
+        assert(not err, tostring(err))
+        saved_async = value
+      end)
+      assert(vim.wait(1000, function()
+        return saved_async ~= nil
+      end))
+      h.eq("2", saved_async.document._rev)
+      h.eq("asynchronous", saved_async.document.name)
+
+      local created = client.create_document(config, "items", { _key = "new-key", name = "created" })
+      h.eq("items/new-key", created.id)
+      h.eq("2", created.document._rev)
+      h.eq("created", created.document.name)
+
+      local created_async
+      client.create_document_async(config, "items", { _key = "new-key", name = "created" }, function(err, value)
+        assert(not err, tostring(err))
+        created_async = value
+      end)
+      assert(vim.wait(1000, function()
+        return created_async ~= nil
+      end))
+      h.eq("new-key", created_async.key)
+      h.eq("2", created_async.document._rev)
+    end)
+  end),
+
+  h.test("redirects are reported instead of decoding as empty results", function()
+    with_client(function()
+      return {
+        status = 302,
+        headers = { location = "https://db.example.com:8529/_db/test/_api/database/user" },
+        body = "",
+      }
+    end, function(client)
+      local ok, err = pcall(client.list_databases, config)
+      h.eq(false, ok)
+      h.eq(true, require("arangodb.errors").is(err, "server"))
+      h.eq(302, err.status)
+      h.matches("HTTP 302", tostring(err))
+      h.matches("db%.example%.com", tostring(err))
+    end)
+  end),
+
+  h.test("a failed AQL page releases the server cursor", function()
+    local deleted_path
+    with_client(function(opts)
+      if opts.method == "POST" then
+        return json_response({ result = { { _key = "a" } }, hasMore = true, id = "lost-cursor" })
+      elseif opts.method == "PUT" then
+        return json_response({ error = true, errorMessage = "page failed" }, 500)
+      elseif opts.method == "DELETE" then
+        deleted_path = opts.path
+        return json_response({ error = false })
+      end
+      error("unexpected request: " .. opts.method .. " " .. opts.path)
+    end, function(client)
+      h.fails("page failed", function()
+        client.list_fields(config, "items", 10)
+      end)
+    end)
+    h.matches("/_api/cursor/lost%-cursor$", deleted_path)
+  end),
+
   h.test("cursor-backed browsing reads one page at a time asynchronously", function()
     local requests = {}
     with_client(function(opts)

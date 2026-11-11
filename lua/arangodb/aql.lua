@@ -530,6 +530,9 @@ local function inspect_query(session, mode, query)
       return
     end
     session.mode = mode
+    session.pages = {}
+    session.page_index = 0
+    session.total_count = nil
     M.render_result(session, {
       database = session.config.database,
       mode = mode,
@@ -735,6 +738,13 @@ save_named = function(session)
     name = type(name) == "string" and vim.trim(name) or ""
     if name == "" then
       return
+    end
+    local identity = { name = name, connection = session.connection, database = session.config.database }
+    if library.find(identity) then
+      local answer = vim.fn.confirm(string.format('Overwrite named AQL query "%s"?', name), "&Overwrite\n&Cancel", 2)
+      if answer ~= 1 then
+        return
+      end
     end
     local ok, saved = pcall(library.put, {
       name = name,

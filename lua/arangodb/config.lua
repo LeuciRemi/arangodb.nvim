@@ -141,6 +141,12 @@ local function validate_keymaps(name, keymaps)
   end
 end
 
+local function assert_connection_url(name, url)
+  if require("arangodb.core").parse_connection(url) == nil then
+    error(string.format("arangodb.nvim: connection `%s` has an invalid URL", tostring(name)), 3)
+  end
+end
+
 local function validate_connections(connections)
   if connections == nil then
     return
@@ -152,6 +158,7 @@ local function validate_connections(connections)
       if type(entry) ~= "table" or type(entry.name) ~= "string" or type(entry.url) ~= "string" then
         error(string.format("arangodb.nvim: `connections[%d]` must contain string `name` and `url` fields", index), 3)
       end
+      assert_connection_url(entry.name, entry.url)
       if entry.user ~= nil and type(entry.user) ~= "string" then
         error(string.format("arangodb.nvim: `connections[%d].user` must be a string", index), 3)
       end
@@ -202,6 +209,8 @@ local function validate_connections(connections)
       local copy = vim.deepcopy(profile)
       copy.name = name
       validate_connections({ copy })
+    else
+      assert_connection_url(name, profile)
     end
   end
 end

@@ -215,4 +215,38 @@ return {
     h.eq("Delete index", action_items[2].label)
     h.eq("Create index", action_items[3].label)
   end),
+
+  h.test("cancelling the index inspect menu reopens the index list", function()
+    local original_select = vim.ui.select
+    local index_picker_count = 0
+    local backed = false
+    vim.ui.select = function(items, opts, done)
+      if opts.prompt == "Indexes (test/items)" then
+        index_picker_count = index_picker_count + 1
+        if index_picker_count == 1 then
+          done(items[2])
+        end
+        return
+      end
+      done(nil)
+    end
+
+    local ok, err = xpcall(function()
+      with_admin({
+        list_indexes_async = function(_, _, done)
+          done(nil, { { id = "items/by_email", name = "by_email", type = "persistent", fields = { "email" } } })
+        end,
+      }, { open = function() end }, function(admin)
+        admin.manage_indexes(config, "items", nil, function()
+          backed = true
+        end)
+      end)
+    end, debug.traceback)
+    vim.ui.select = original_select
+    if not ok then
+      error(err, 0)
+    end
+    h.eq(2, index_picker_count)
+    h.eq(false, backed)
+  end),
 }

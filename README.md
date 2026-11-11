@@ -230,6 +230,8 @@ connections = {
 
 Export `ARANGODB_WORK_PASSWORD` before launching Neovim. Alternatively, `NVIM_ARANGO_<NAME>_URL` supplies a complete URL; the connection is named after the database in that URL.
 
+A URL that cannot be parsed, for example one without `http://` or `https://`, is an error at `setup()` time and names the offending connection. It is never used for a request.
+
 Sources are checked in order: `setup().connections`, `vim.g.arangodb_connections`, then environment URLs. The first source wins for duplicate names. Authentication is optional; percent-encoded credentials and bracketed IPv6 hosts are supported.
 
 For password callbacks, external commands, and server discovery variables, see [`:help arangodb.nvim-connections`](doc/arangodb.nvim.txt). Use `tls_ca_file` for a private CA and keep `tls_verify = true`.
@@ -239,11 +241,13 @@ For password callbacks, external commands, and server discovery variables, see [
 | Command | Action |
 | --- | --- |
 | `:ArangoBrowse [database]` | Browse a connection; use its configured alias |
-| `:ArangoResume` / `:ArangoBack` | Resume browsing / go back |
+| `:ArangoResume` / `:ArangoBack` | Resume browsing (reopening the last collections or collection view if the picker was closed) / go back |
 | `:ArangoAql [database]` | Open an AQL editor |
 | `:ArangoAqlAttach [database]` | Attach AQL tooling to an existing `.aql` file |
 | `:ArangoAqlLibrary [database]` | Browse saved queries |
 | `:ArangoGraph [database]` | Explore a named graph |
+
+Database arguments complete from your configured connections and from database names discovered earlier in this session. Completion never contacts the server.
 
 In a document buffer, `:write` saves to ArangoDB. `:ArangoDocumentDuplicate`, `:ArangoDocumentDelete`, `:ArangoDocumentRelated`, and `:ArangoDocumentGraph` provide document actions. Saves detect revision conflicts and offer reload, comparison, or explicit overwrite.
 
@@ -253,7 +257,7 @@ AQL queries open with a companion JSON bind-variable buffer. Commands and normal
 
 Loading history or a named query into an attached `.aql` file keeps it marked as modified and asks before replacing unsaved query edits. Explain and Validate responses remain JSON when table results are selected.
 
-History and named queries persist locally, including bind variables. For sensitive queries, disable `aql.history.enabled` or `aql.history.store_bind_vars`, and avoid saving sensitive values in the query library. See [`:help arangodb.nvim-aql`](doc/arangodb.nvim.txt) for storage, session, and command details.
+History and named queries persist locally, including bind variables. Saving a named query over an existing name in the same connection and database asks for confirmation. A corrupt history or library file is renamed to `<path>.corrupt-<timestamp>` with a warning before a new file is written. For sensitive queries, disable `aql.history.enabled` or `aql.history.store_bind_vars`, and avoid saving sensitive values in the query library. See [`:help arangodb.nvim-aql`](doc/arangodb.nvim.txt) for storage, session, and command details.
 
 Default AQL-buffer mappings:
 
@@ -268,7 +272,8 @@ Default AQL-buffer mappings:
 | `<leader>al` | Browse named queries |
 | `<leader>as` | Save the query by name |
 | `<leader>ac` | Cancel and close the active cursor |
-| `<C-p>` / `<C-n>` | Previous / next result page |
+
+Result pages belong to the read-only result split: `<C-p>` / `<C-n>` (or `:ArangoAqlPrevPage` / `:ArangoAqlNextPage`) move through cached pages there. These two keys come from `aql_keymaps` but are only mapped in the result buffer.
 
 Picker shortcuts: `<Enter>` opens the selection, `<C-x>` opens its actions, and `<C-b>` goes back when available.
 
@@ -332,12 +337,19 @@ Run `:ArangoGraph [database]` and select a graph and start document, or use `:Ar
 require("arangodb").setup(opts)
 require("arangodb").browse({ database = "work" })
 require("arangodb").aql({ database = "work", query = "RETURN 1" })
+require("arangodb").aql({
+  database = "work",
+  query = "FOR user IN @@collection FILTER user.active == @active RETURN user.name",
+  bind_vars = { ["@collection"] = "users", active = true },
+})
 require("arangodb").aql_attach({ database = "work" })
 require("arangodb").aql_library({ database = "work" })
 require("arangodb").graph({ database = "work", graph = "social", start = "users/alice" })
 require("arangodb").resume()
 require("arangodb").back()
 ```
+
+`aql()` pre-fills the editor: `query` sets the query buffer text and `bind_vars` sets the companion JSON buffer. Collection bind variables use an `@name` key such as `["@collection"] = "users"`; value variables use their plain name.
 
 ## Health check
 

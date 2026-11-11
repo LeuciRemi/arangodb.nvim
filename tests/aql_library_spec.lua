@@ -57,4 +57,24 @@ return {
     vim.fn.delete(path)
     config.setup()
   end),
+
+  h.test("saving a named query keeps a corrupt library file as a backup", function()
+    local config = require("arangodb.config")
+    local library = require("arangodb.aql_library")
+    local path = vim.fn.tempname() .. ".json"
+    vim.fn.writefile({ "not-json" }, path)
+    config.setup({ aql = { library = { path = path }, history = { enabled = false } } })
+
+    library.put({ name = "recovered", connection = "local", database = "app", query = "RETURN 1" })
+
+    local backups = vim.fn.glob(path .. ".corrupt-*", false, true)
+    h.eq(1, #backups)
+    h.eq({ "not-json" }, vim.fn.readfile(backups[1]))
+    local entries = library.load()
+    h.eq(1, #entries)
+    h.eq("RETURN 1", entries[1].query)
+    vim.fn.delete(backups[1])
+    vim.fn.delete(path)
+    config.setup()
+  end),
 }

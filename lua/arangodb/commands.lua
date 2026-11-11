@@ -4,13 +4,13 @@ local M = {}
 local created = false
 
 --- Offer completion based on the configured and discovered database names.
+--- Never performs network I/O: discovery happens elsewhere, on demand.
 local function complete_databases(arg_lead)
-  local items = require("arangodb.core").available_databases()
   local matches = {}
 
-  for _, item in ipairs(items) do
-    if arg_lead == "" or vim.startswith(item.name, arg_lead) then
-      matches[#matches + 1] = item.name
+  for _, name in ipairs(require("arangodb.core").completion_databases()) do
+    if arg_lead == "" or vim.startswith(name, arg_lead) then
+      matches[#matches + 1] = name
     end
   end
 

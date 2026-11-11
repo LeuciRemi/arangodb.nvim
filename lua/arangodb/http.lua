@@ -532,13 +532,21 @@ function M.request(opts)
   end)
 
   local timeout = math.floor(tonumber(opts.timeout) or 30000)
-  if not vim.wait(timeout + 250, function()
+  local waited, reason = vim.wait(timeout + 250, function()
     return done
-  end, 10) then
+  end, 10)
+  if not waited then
     handle.cancel()
     vim.wait(100, function()
       return done
     end, 10)
+    error(
+      errors.new({
+        kind = "transport",
+        message = reason == -2 and "ArangoDB request interrupted" or "ArangoDB request timed out",
+      }),
+      0
+    )
   end
 
   if request_error then

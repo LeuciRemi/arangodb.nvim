@@ -13,6 +13,10 @@ local ENV_SCHEME_ALIASES = {
   tls = "https",
 }
 
+-- Database names from the last successful discovery of this session. Command
+-- completion reads this instead of querying the server on every <Tab>.
+local discovered_databases = {}
+
 local function plugin_config()
   return require("arangodb.config").get()
 end
@@ -246,9 +250,14 @@ function M.resolve_connection(item)
 end
 
 --- Display a normalized user-facing error message.
+--- Cancellations are caller-initiated (closed picker, wiped buffer) and are not reported.
 function M.notify_error(err, title)
-  if require("arangodb.errors").is(err) then
-    err = require("arangodb.errors").format(err)
+  local errors = require("arangodb.errors")
+  if errors.is(err, "cancelled") then
+    return
+  end
+  if errors.is(err) then
+    err = errors.format(err)
   end
   if type(err) == "string" then
     err = vim.trim(err)
@@ -344,7 +353,28 @@ function M.discover_databases()
     return fallback
   end
 
+  discovered_databases = vim.deepcopy(output)
   return output
+end
+
+--- Return database names for command completion without any network request.
+function M.completion_databases()
+  local names = {}
+  local seen = {}
+  for _, item in ipairs(configured_connections()) do
+    if not seen[item.name] then
+      seen[item.name] = true
+      names[#names + 1] = item.name
+    end
+  end
+  for _, name in ipairs(discovered_databases) do
+    if not seen[name] then
+      seen[name] = true
+      names[#names + 1] = name
+    end
+  end
+  table.sort(names)
+  return names
 end
 
 --- Return the full list of configured and discovered database connections.
