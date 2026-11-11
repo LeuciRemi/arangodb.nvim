@@ -4,6 +4,8 @@ All notable changes to arangodb.nvim are documented here.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-11
+
 ### Added
 
 - Write AQL history and named-query files under an exclusive `<path>.lock` file (retries every 10 ms for up to one second, stale locks older than 10 seconds taken over), so concurrent Neovim instances no longer lose each other's entries; a history entry that cannot be recorded in time is skipped with one warning instead of failing the query.
@@ -21,6 +23,10 @@ All notable changes to arangodb.nvim are documented here.
 - Rebuild the named-query library as a snacks.nvim picker with search and preview instead of nested `vim.ui.select` prompts; `<C-x>` opens Load and confirmed Delete.
 - Explain AQL queries before Execute and Profile only when the text contains `INSERT`, `UPDATE`, `REPLACE`, `REMOVE`, or `UPSERT` as a whole word, so read queries no longer pay for an explain request.
 - Request one row beyond `graph.max_nodes` and report omitted vertices in the header as `Limit: N (truncated — raise graph.max_nodes)` instead of dropping them silently.
+- Update StyLua to 2.6.0 in CI and contributor docs. Neovim CI keeps the 0.10.4 support floor and the current stable release (0.12.6 at update time); ArangoDB 3.12.12, snacks.nvim 2.31.0 and all GitHub Actions were already at their latest releases.
+- Complete database arguments from configured connections and databases discovered during the session, without any network request.
+- Offer "Create document" in the collections actions menu.
+- Fail the test runner when it collects no tests, and ignore `nvim.log` in Git.
 
 ### Fixed
 
@@ -49,13 +55,6 @@ All notable changes to arangodb.nvim are documented here.
 - Return from the index inspect/delete menu to the index list with `<Esc>`.
 - Start a fresh query after a failed document page fetch instead of retrying the dead cursor.
 - Restore the history entry when `:ArangoBack` cannot reopen a document.
-
-### Changed
-
-- Update StyLua to 2.6.0 in CI and contributor docs. Neovim CI keeps the 0.10.4 support floor and the current stable release (0.12.6 at update time); ArangoDB 3.12.12, snacks.nvim 2.31.0 and all GitHub Actions were already at their latest releases.
-- Complete database arguments from configured connections and databases discovered during the session, without any network request.
-- Offer "Create document" in the collections actions menu.
-- Fail the test runner when it collects no tests, and ignore `nvim.log` in Git.
 
 ### Tests
 
@@ -125,6 +124,7 @@ All notable changes to arangodb.nvim are documented here.
 
 - Collection editor transitions close the active picker cleanly and no longer recreate an existing Snacks backdrop, preventing background flicker.
 
+[0.7.0]: https://github.com/LeuciRemi/arangodb.nvim/compare/v0.6.2...v0.7.0
 [0.6.2]: https://github.com/LeuciRemi/arangodb.nvim/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/LeuciRemi/arangodb.nvim/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/LeuciRemi/arangodb.nvim/compare/v0.5.2...v0.6.0
