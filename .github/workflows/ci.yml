@@ -13,8 +13,8 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: JohnnyMorganz/stylua-action@v5.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: JohnnyMorganz/stylua-action@76fd70c03e6340ceaf673366712db9b20560b402 # v5.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: 2.6.0
@@ -28,8 +28,8 @@ jobs:
       matrix:
         neovim: [v0.10.4, stable]
     steps:
-      - uses: actions/checkout@v7
-      - uses: rhysd/action-setup-vim@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1
         with:
           version: ${{ matrix.neovim }}
           neovim: true
@@ -48,8 +48,8 @@ jobs:
       matrix:
         snacks: [v2.31.0, main]
     steps:
-      - uses: actions/checkout@v7
-      - uses: rhysd/action-setup-vim@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1
         with:
           version: stable
           neovim: true
@@ -70,8 +70,8 @@ jobs:
         ports:
           - 8529:8529
     steps:
-      - uses: actions/checkout@v7
-      - uses: rhysd/action-setup-vim@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1
         with:
           version: stable
           neovim: true
